@@ -3,18 +3,25 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import subprocess
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("dashboard")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -469,3 +476,98 @@ async def api_my_tasks(username: str):
     ])
 
     return JSONResponse({"issues": issues, "prs": prs})
+
+
+# --- Commit summarization ---
+
+_summary_cache: dict[str, str] = {}
+
+
+def _call_openai(prompt: str) -> str:
+    """Call OpenAI Responses API with gpt-5-mini."""
+    if not OPENAI_API_KEY:
+        return ""
+    body = json.dumps({"model": "gpt-5-mini", "input": prompt}).encode()
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        # Responses API returns output[].content[].text
+        for item in data.get("output", []):
+            if item.get("type") == "message":
+                for part in item.get("content", []):
+                    if part.get("type") == "output_text":
+                        return part["text"]
+        return ""
+    except Exception as e:
+        log.warning("OpenAI call failed: %s", e)
+        return ""
+
+
+def _build_summary_prompt(repo: str, commits: list[dict], merged_prs: list[dict]) -> str:
+    lines = [f"Summarize the development work done on the '{repo}' repository this week."]
+    if merged_prs:
+        lines.append("\nMerged PRs:")
+        for pr in merged_prs:
+            lines.append(f"  - {pr.get('title', '?')} (by @{pr.get('author', '?')})")
+    if commits:
+        lines.append("\nCommits:")
+        for c in commits:
+            lines.append(f"  - {c.get('message', '?')} ({c.get('author', '?')})")
+    lines.append(
+        "\nWrite 1-3 concise bullet points describing what was accomplished. "
+        "Group related commits together. Use plain language a project manager would understand. "
+        "Don't mention commit hashes or PR numbers. Keep it brief."
+    )
+    return "\n".join(lines)
+
+
+@app.post("/api/summarize-commits")
+async def api_summarize_commits(request: Request):
+    if not OPENAI_API_KEY:
+        return JSONResponse({"error": "OPENAI_API_KEY not configured"}, status_code=503)
+
+    body = await request.json()
+    repos_data = body.get("repos", [])
+    results = {}
+
+    loop = asyncio.get_event_loop()
+
+    def summarize_one(repo_entry):
+        repo = repo_entry["repo"]
+        commits = repo_entry.get("commits", [])
+        merged_prs = repo_entry.get("merged_prs", [])
+
+        # Cache key based on content
+        cache_key = sha256(json.dumps(
+            {"repo": repo, "commits": commits, "prs": merged_prs},
+            sort_keys=True,
+        ).encode()).hexdigest()[:16]
+
+        if cache_key in _summary_cache:
+            return repo, _summary_cache[cache_key]
+
+        prompt = _build_summary_prompt(repo, commits, merged_prs)
+        summary = _call_openai(prompt)
+        if summary:
+            _summary_cache[cache_key] = summary
+        return repo, summary
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            loop.run_in_executor(pool, summarize_one, entry)
+            for entry in repos_data
+        ]
+        for coro in asyncio.as_completed(futures):
+            repo, summary = await coro
+            if summary:
+                results[repo] = summary
+
+    return JSONResponse({"summaries": results})

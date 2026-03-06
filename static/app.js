@@ -139,14 +139,16 @@ function renderWeekly(data) {
   const commitRepos = Object.keys(data.commits_by_repo || {});
   if (commitRepos.length) {
     html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
-      <h3 class="text-lg font-semibold mb-3">Work Done This Week</h3>`;
+      <h3 class="text-lg font-semibold mb-3">Recent Changes</h3>`;
     for (const repo of commitRepos) {
       const commits = data.commits_by_repo[repo];
       const authors = [...new Set(commits.map(c => c.author))];
+      const summaryId = `summary-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`;
       html += `<div class="mb-3">
         ${repoLink(repo)}
         <span class="text-gray-500 text-sm">(${commits.length} commits)</span>
         <span class="text-gray-400 text-sm ml-2">${authors.join(', ')}</span>
+        <div id="${summaryId}" class="ml-1 mt-1 mb-1 text-sm text-gray-300 border-l-2 border-accent/30 pl-3 hidden"></div>
         <ul class="ml-5 mt-1 text-sm text-gray-300 list-disc">`;
       const commitLink = (c) => `<a href="https://github.com/sil-ai/${repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs ml-1">${c.sha}</a>`;
       const commitAuthor = (c) => `<span class="text-gray-500 text-xs ml-1">${escHtml(c.author)}</span>`;
@@ -202,6 +204,92 @@ function renderWeekly(data) {
       if (weeklyEnd > today) weeklyEnd = today;
       loadWeekly();
     });
+  }
+
+  // Async-fetch AI summaries for each repo's commits
+  fetchCommitSummaries(data);
+}
+
+// AI commit summaries cache
+const summaryCache = {};
+
+async function fetchCommitSummaries(data) {
+  const commitRepos = Object.keys(data.commits_by_repo || {});
+  if (!commitRepos.length) return;
+
+  // Build merged PRs lookup by repo
+  const prsByRepo = {};
+  for (const pr of (data.prs_merged || [])) {
+    const repo = repoName(pr.repository);
+    (prsByRepo[repo] = prsByRepo[repo] || []).push({
+      title: pr.title,
+      author: pr.author?.login || '?',
+    });
+  }
+
+  // Build request payload
+  const repos = commitRepos.map(repo => ({
+    repo,
+    commits: data.commits_by_repo[repo],
+    merged_prs: prsByRepo[repo] || [],
+  }));
+
+  // Check cache - build a key from the data
+  const cacheKey = JSON.stringify(repos.map(r => r.repo + ':' + r.commits.length));
+  if (summaryCache[cacheKey]) {
+    injectSummaries(summaryCache[cacheKey]);
+    return;
+  }
+
+  // Show loading indicators
+  for (const repo of commitRepos) {
+    const el = document.getElementById(`summary-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`);
+    if (el) {
+      el.innerHTML = '<span class="text-gray-500 text-xs">Generating summary...</span>';
+      el.classList.remove('hidden');
+    }
+  }
+
+  try {
+    const resp = await fetch('/api/summarize-commits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repos }),
+    });
+    if (!resp.ok) {
+      // Silently hide on error (e.g. no API key)
+      for (const repo of commitRepos) {
+        const el = document.getElementById(`summary-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`);
+        if (el) el.classList.add('hidden');
+      }
+      return;
+    }
+    const result = await resp.json();
+    const summaries = result.summaries || {};
+    summaryCache[cacheKey] = summaries;
+    injectSummaries(summaries);
+  } catch {
+    // Silently fail - summaries are a nice-to-have
+    for (const repo of commitRepos) {
+      const el = document.getElementById(`summary-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`);
+      if (el) el.classList.add('hidden');
+    }
+  }
+}
+
+function injectSummaries(summaries) {
+  for (const [repo, summary] of Object.entries(summaries)) {
+    const el = document.getElementById(`summary-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`);
+    if (el && summary) {
+      // Convert markdown-style bullets to HTML
+      const html = summary.split('\n')
+        .filter(l => l.trim())
+        .map(l => l.replace(/^[-•*]\s*/, ''))
+        .map(l => `<div>• ${escHtml(l)}</div>`)
+        .join('');
+      el.innerHTML = html;
+      el.classList.remove('hidden');
+    }
   }
 }
 
@@ -550,7 +638,8 @@ function renderRepoModal(data) {
   const branches = Object.keys(data.branch_commits || {});
   if (branches.length) {
     html += `<div class="mb-2">
-      <h4 class="font-semibold mb-3">Recent Commits</h4>`;
+      <h4 class="font-semibold mb-3">Recent Changes</h4>
+      <div id="modal-commit-summary" class="mb-3 text-sm text-gray-300 border-l-2 border-accent/30 pl-3 hidden"></div>`;
     for (const branch of branches) {
       const commits = data.branch_commits[branch];
       html += `<div class="mb-3">
@@ -569,6 +658,35 @@ function renderRepoModal(data) {
   }
 
   body.innerHTML = html;
+
+  // Fetch AI summary for modal commits
+  if (branches.length) {
+    const allCommits = branches.flatMap(b => data.branch_commits[b] || []);
+    if (allCommits.length) {
+      const el = document.getElementById('modal-commit-summary');
+      if (el) {
+        el.innerHTML = '<span class="text-gray-500 text-xs">Generating summary...</span>';
+        el.classList.remove('hidden');
+        fetch('/api/summarize-commits', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repos: [{ repo: data.repo, commits: allCommits, merged_prs: [] }] }),
+        }).then(r => r.ok ? r.json() : null).then(result => {
+          const summary = result?.summaries?.[data.repo];
+          if (summary && el) {
+            const html = summary.split('\n')
+              .filter(l => l.trim())
+              .map(l => l.replace(/^[-•*]\s*/, ''))
+              .map(l => `<div>• ${escHtml(l)}</div>`)
+              .join('');
+            el.innerHTML = html;
+          } else if (el) {
+            el.classList.add('hidden');
+          }
+        }).catch(() => { if (el) el.classList.add('hidden'); });
+      }
+    }
+  }
 }
 
 // --- My Tasks ---
