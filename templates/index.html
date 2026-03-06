@@ -438,6 +438,17 @@
       });
     }
 
+    // Project groupings
+    const projects = {
+      'AQuA': ['aqua-api', 'aqua-assessments', 'aqua-django-app', 'attention-word-alignments', 'nllb-word-alignment-from-attention'],
+      'Aero': ['aero-api', 'aero-django-app', 'tts-finetuning', 'coqui-mms', 'asr-finetuning', 'SAM-audio-isolation', 'audio-preprocessing'],
+      'FaithBridge': ['faithbridge-obt-django-app'],
+      'Alpha2': ['madlad-finetuning', 'T5Gemma-finetuning', 'translator', 'translation-tts-app'],
+      'GMO Copilot': ['gmo-ai-copilot'],
+      'Infra': ['observability-library', 'observability-service', 'playwright-tests', 'shared-skills'],
+    };
+    let activeProject = null;
+
     async function loadRepoStatus() {
       await fetchCached('/api/repo-summaries', (summaries) => {
         summaries.sort((a, b) => (b.last_commit || '').localeCompare(a.last_commit || ''));
@@ -446,11 +457,21 @@
     }
 
     function renderRepoCards(summaries) {
+      const filtered = activeProject
+        ? summaries.filter(r => projects[activeProject]?.includes(r.name))
+        : summaries;
 
-      let html = `<h2 class="text-2xl font-bold mb-6">Repo Status</h2>
+      let html = `<h2 class="text-2xl font-bold mb-4">Repo Status</h2>
+        <div class="flex flex-wrap gap-2 mb-6">
+          <button class="project-btn px-3 py-1.5 rounded-lg text-sm font-medium transition ${!activeProject ? 'bg-accent text-white' : 'bg-panel border border-gray-600 text-gray-400 hover:text-white'}" data-project="">All</button>
+          ${Object.keys(projects).map(p => `<button class="project-btn px-3 py-1.5 rounded-lg text-sm font-medium transition ${activeProject === p ? 'bg-accent text-white' : 'bg-panel border border-gray-600 text-gray-400 hover:text-white'}" data-project="${p}">${p} <span class="text-xs opacity-60">${projects[p].length}</span></button>`).join('')}
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">`;
 
-      for (const repo of summaries) {
+      // Find max weekly commits across all repos for scaling
+      const maxWeek = Math.max(1, ...filtered.map(r => Math.max(...(r.week_commits || [0]))));
+
+      for (const repo of filtered) {
         const hasP0 = repo.p0 > 0;
         const hasP1 = repo.p1 > 0;
         const border = hasP0 ? 'border-red-500/50' : hasP1 ? 'border-yellow-500/30' : 'border-gray-700';
@@ -475,11 +496,18 @@
             <div class="font-semibold text-white truncate">${repo.name}</div>
             ${lastCommit ? `<span class="text-xs text-gray-500 whitespace-nowrap ml-2">${lastCommit}</span>` : ''}
           </div>
-          <div class="flex gap-4 text-sm mb-2">
+          <div class="flex items-center gap-4 text-sm mb-2">
             <span class="text-gray-400">Issues <span class="text-white">${repo.issues}</span></span>
             <span class="text-gray-400">PRs <span class="text-white">${repo.prs}</span></span>
             ${hasP0 ? `<span class="priority-p0 text-xs">P0: ${repo.p0}</span>` : ''}
             ${hasP1 ? `<span class="priority-p1 text-xs">P1: ${repo.p1}</span>` : ''}
+            <span class="flex items-end gap-px ml-auto h-4" title="Commits: last 4 weeks">${
+              (repo.week_commits || [0,0,0,0]).slice().reverse().map(c => {
+                const h = c === 0 ? 2 : Math.max(4, Math.round((c / maxWeek) * 16));
+                const color = c === 0 ? 'bg-gray-700' : 'bg-accent/70';
+                return `<span class="${color} rounded-sm" style="width:4px;height:${h}px"></span>`;
+              }).join('')
+            }</span>
           </div>
           ${issueList ? `<div class="border-t border-gray-700 pt-2 mt-1 space-y-0.5">${issueList}</div>` : ''}
           ${prList ? `<div class="border-t border-gray-700 pt-2 mt-1 space-y-0.5">${prList}</div>` : ''}
@@ -492,6 +520,14 @@
       // Card click -> open modal
       $$('.repo-card').forEach(card => {
         card.addEventListener('click', () => openRepoModal(card.dataset.repo));
+      });
+
+      // Project filter buttons
+      $$('.project-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          activeProject = btn.dataset.project || null;
+          renderRepoCards(summaries);
+        });
       });
     }
 
@@ -548,7 +584,7 @@
         html += `<table class="w-full text-sm"><tbody>`;
         for (const pr of data.prs) {
           html += `<tr class="border-t border-gray-700">
-            <td class="py-1"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">#${pr.number} ${escHtml(pr.title)}</a></td>
+            <td class="py-1"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">#${pr.number} ${escHtml(pr.title)}</a>${pr.isDraft ? ' <span class="text-gray-500 bg-gray-700 rounded px-1.5 py-0.5 text-xs">draft</span>' : ''}</td>
             <td class="py-1 text-gray-400 text-right">@${pr.author?.login || '?'}</td>
             <td class="py-1 text-gray-500 text-right w-24">${daysAgo(pr.createdAt)}d</td>
           </tr>`;

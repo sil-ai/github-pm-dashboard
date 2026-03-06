@@ -127,14 +127,26 @@ async def api_repo_summaries():
                 for p in prs[:3]
             ]
 
-            # Last commit date
+            # Last commit date + recent commit count (4 weeks, per week)
+            fourteen_ago = since_date(14)
             try:
-                last_commit = run_gh([
-                    "api", f"repos/sil-ai/{repo}/commits?per_page=1",
-                    "-q", ".[0].commit.author.date",
+                raw = run_gh([
+                    "api", f"repos/sil-ai/{repo}/commits?since={since_date(28)}T00:00:00Z&per_page=100",
+                    "-q", ".[].commit.author.date",
                 ], timeout=10)
+                commit_dates = [line.strip() for line in raw.splitlines() if line.strip()] if raw else []
+                last_commit = commit_dates[0] if commit_dates else ""
+
+                # Bucket into 4 weeks (index 0 = most recent)
+                now = datetime.now(timezone.utc)
+                week_counts = [0, 0, 0, 0]
+                for d in commit_dates:
+                    age = (now - datetime.fromisoformat(d.replace("Z", "+00:00"))).days
+                    week_idx = min(age // 7, 3)
+                    week_counts[week_idx] += 1
             except Exception:
                 last_commit = ""
+                week_counts = [0, 0, 0, 0]
 
             return {
                 "name": repo,
@@ -142,6 +154,7 @@ async def api_repo_summaries():
                 "prs": len(prs),
                 "p0": p0,
                 "p1": p1,
+                "week_commits": week_counts,
                 "top_issues": top_issues,
                 "top_prs": top_prs,
                 "last_commit": last_commit,
@@ -149,7 +162,8 @@ async def api_repo_summaries():
         except Exception as e:
             log.warning("  %s: failed (%s)", repo, e)
             return {"name": repo, "issues": 0, "prs": 0, "p0": 0, "p1": 0,
-                    "top_issues": [], "top_prs": [], "last_commit": ""}
+                    "top_issues": [], "top_prs": [], "last_commit": "",
+                    "week_commits": [0, 0, 0, 0]}
 
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -301,7 +315,7 @@ async def api_repo_status(repo: str):
 
     prs = run_gh_json([
         "pr", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
-        "--json", "number,title,author,createdAt,reviewRequests,url,body,headRefName",
+        "--json", "number,title,author,createdAt,reviewRequests,url,body,headRefName,isDraft",
         "--limit", "50",
     ])
 
@@ -352,7 +366,12 @@ async def api_repo_status(repo: str):
     except Exception:
         branches = []
 
-    target_branches = [b for b in branches if b in ("main", "master")]
+    if "main" in branches:
+        target_branches = ["main"]
+    elif "master" in branches:
+        target_branches = ["master"]
+    else:
+        target_branches = []
     target_branches += sorted(
         [b for b in branches if b.startswith("release") and b not in target_branches]
     )
