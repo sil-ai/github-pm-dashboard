@@ -90,30 +90,66 @@ async def api_repo_summaries():
         try:
             issues = run_gh_json([
                 "issue", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
-                "--json", "number,labels",
+                "--json", "number,title,labels,url",
                 "--limit", "200",
             ], timeout=15)
             prs = run_gh_json([
                 "pr", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
-                "--json", "number",
+                "--json", "number,title,author,url,isDraft",
                 "--limit", "50",
             ], timeout=15)
-            p0 = sum(1 for i in issues if any(
-                (l.get("name", "") or "").startswith("P0") for l in (i.get("labels") or [])
-            ))
-            p1 = sum(1 for i in issues if any(
-                (l.get("name", "") or "").startswith("P1") for l in (i.get("labels") or [])
-            ))
+
+            def priority_rank(issue):
+                for l in (issue.get("labels") or []):
+                    n = l.get("name", "") or ""
+                    if n.startswith("P0"): return 0
+                    if n.startswith("P1"): return 1
+                    if n.startswith("P2"): return 2
+                    if n.startswith("P3"): return 3
+                return 9
+
+            p0 = sum(1 for i in issues if priority_rank(i) == 0)
+            p1 = sum(1 for i in issues if priority_rank(i) == 1)
+
+            # Top issues: P0/P1 first, then most recent, up to 3
+            sorted_issues = sorted(issues, key=priority_rank)
+            top_issues = [
+                {"number": i["number"], "title": i["title"], "url": i["url"],
+                 "labels": [l.get("name", "") for l in (i.get("labels") or [])]}
+                for i in sorted_issues[:3]
+            ]
+
+            # Top PRs: up to 3
+            top_prs = [
+                {"number": p["number"], "title": p["title"], "url": p["url"],
+                 "author": p.get("author", {}).get("login", "?"),
+                 "isDraft": p.get("isDraft", False)}
+                for p in prs[:3]
+            ]
+
+            # Last commit date
+            try:
+                last_commit = run_gh([
+                    "api", f"repos/sil-ai/{repo}/commits?per_page=1",
+                    "-q", ".[0].commit.author.date",
+                ], timeout=10)
+            except Exception:
+                last_commit = ""
+
             return {
                 "name": repo,
                 "issues": len(issues),
                 "prs": len(prs),
                 "p0": p0,
                 "p1": p1,
+                "top_issues": top_issues,
+                "top_prs": top_prs,
+                "last_commit": last_commit,
             }
         except Exception as e:
             log.warning("  %s: failed (%s)", repo, e)
-            return {"name": repo, "issues": 0, "prs": 0, "p0": 0, "p1": 0}
+            return {"name": repo, "issues": 0, "prs": 0, "p0": 0, "p1": 0,
+                    "top_issues": [], "top_prs": [], "last_commit": ""}
 
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -307,12 +343,41 @@ async def api_repo_status(repo: str):
         pr.pop("body", None)
         pr.pop("headRefName", None)
 
+    # Recent commits on main and release branches
+    try:
+        branches = run_gh_json([
+            "api", f"repos/sil-ai/{repo}/branches?per_page=100",
+            "--jq", "[.[].name]",
+        ], timeout=10)
+    except Exception:
+        branches = []
+
+    target_branches = [b for b in branches if b in ("main", "master")]
+    target_branches += sorted(
+        [b for b in branches if b.startswith("release") and b not in target_branches]
+    )
+
+    branch_commits: dict[str, list] = {}
+    for branch in target_branches:
+        try:
+            raw = run_gh([
+                "api", f"repos/sil-ai/{repo}/commits?sha={branch}&per_page=10",
+                "-q", '.[] | {sha: .sha[:7], date: .commit.author.date, author: (.author.login // .commit.author.name), message: (.commit.message | split("\n")[0])}',
+            ], timeout=10)
+            if raw:
+                commits = [json.loads(line) for line in raw.splitlines() if line.strip()]
+                if commits:
+                    branch_commits[branch] = commits
+        except Exception:
+            pass
+
     return JSONResponse({
         "repo": repo,
         "issues": issues,
         "prs": prs,
         "milestones": milestones,
         "recent_closed": recent_closed,
+        "branch_commits": branch_commits,
     })
 
 
