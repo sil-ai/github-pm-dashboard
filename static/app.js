@@ -90,13 +90,26 @@ async function fetchJson(url) {
   return res.json();
 }
 
-// Cache with stale-while-revalidate
+// Cache with stale-while-revalidate (memory + localStorage)
 const cache = {};
 let fetchGen = 0;
 
+function lsKey(url) { return 'pm:' + url; }
+function lsGet(url) {
+  try { const v = localStorage.getItem(lsKey(url)); return v ? JSON.parse(v) : null; } catch { return null; }
+}
+function lsSet(url, data) {
+  try { localStorage.setItem(lsKey(url), JSON.stringify(data)); } catch {}
+}
+
 async function fetchCached(url, onData) {
   const gen = ++fetchGen;
-  const cached = cache[url];
+  // Try memory cache first, then localStorage
+  let cached = cache[url];
+  if (!cached) {
+    const stored = lsGet(url);
+    if (stored) { cached = { data: stored }; cache[url] = cached; }
+  }
   if (cached) {
     onData(cached.data, true);
   }
@@ -109,6 +122,7 @@ async function fetchCached(url, onData) {
   const isStale = data._stale;
   delete data._stale;
   cache[url] = { data, time: Date.now() };
+  lsSet(url, data);
   if (!cached || JSON.stringify(data) !== JSON.stringify(cached.data)) {
     onData(data, false);
   }
@@ -120,6 +134,7 @@ async function fetchCached(url, onData) {
       const fresh = await fetchJson(url + sep + 'fresh=1');
       delete fresh._stale;
       cache[url] = { data: fresh, time: Date.now() };
+      lsSet(url, fresh);
       if (gen === fetchGen && JSON.stringify(fresh) !== JSON.stringify(data)) {
         onData(fresh, false);
       }
@@ -563,7 +578,11 @@ async function openRepoModal(repo) {
   title.innerHTML = repoLink(repo);
   modal.classList.remove('hidden');
 
-  const cached = cache[url];
+  let cached = cache[url];
+  if (!cached) {
+    const stored = lsGet(url);
+    if (stored) { cached = { data: stored }; cache[url] = cached; }
+  }
   if (cached) {
     renderRepoModal(cached.data);
   } else {
@@ -574,6 +593,7 @@ async function openRepoModal(repo) {
   const isStale = data._stale;
   delete data._stale;
   cache[url] = { data, time: Date.now() };
+  lsSet(url, data);
   if (!cached || JSON.stringify(data) !== JSON.stringify(cached.data)) {
     renderRepoModal(data);
   }
@@ -585,6 +605,7 @@ async function openRepoModal(repo) {
       const fresh = await fetchJson(url + sep + 'fresh=1');
       delete fresh._stale;
       cache[url] = { data: fresh, time: Date.now() };
+      lsSet(url, fresh);
       if (JSON.stringify(fresh) !== JSON.stringify(data)) {
         renderRepoModal(fresh);
       }
