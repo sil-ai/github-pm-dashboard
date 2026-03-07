@@ -90,31 +90,17 @@ async function fetchJson(url) {
   return res.json();
 }
 
-// Cache with stale-while-revalidate (memory + localStorage)
+// Cache with stale-while-revalidate
 const cache = {};
 let fetchGen = 0;
 
-function lsKey(url) { return 'pm:' + url; }
-function lsGet(url) {
-  try { const v = localStorage.getItem(lsKey(url)); return v ? JSON.parse(v) : null; } catch { return null; }
-}
-function lsSet(url, data) {
-  try { localStorage.setItem(lsKey(url), JSON.stringify(data)); } catch {}
-}
-
 async function fetchCached(url, onData) {
   const gen = ++fetchGen;
-  // Try memory cache first, then localStorage
-  let cached = cache[url];
-  if (!cached) {
-    const stored = lsGet(url);
-    if (stored) { cached = { data: stored }; cache[url] = cached; }
-  }
+  const cached = cache[url];
   if (cached) {
     onData(cached.data, true);
   }
   $('#refreshing').classList.remove('hidden');
-  // Fetch from server (may return stale cached data with _stale flag)
   const data = await fetchJson(url);
   hideLoading();
   $('#refreshing').classList.add('hidden');
@@ -122,11 +108,9 @@ async function fetchCached(url, onData) {
   const isStale = data._stale;
   delete data._stale;
   cache[url] = { data, time: Date.now() };
-  lsSet(url, data);
   if (!cached || JSON.stringify(data) !== JSON.stringify(cached.data)) {
     onData(data, false);
   }
-  // If server returned stale data, re-fetch fresh in background
   if (isStale) {
     $('#refreshing').classList.remove('hidden');
     try {
@@ -134,7 +118,6 @@ async function fetchCached(url, onData) {
       const fresh = await fetchJson(url + sep + 'fresh=1');
       delete fresh._stale;
       cache[url] = { data: fresh, time: Date.now() };
-      lsSet(url, fresh);
       if (gen === fetchGen && JSON.stringify(fresh) !== JSON.stringify(data)) {
         onData(fresh, false);
       }
@@ -578,26 +561,19 @@ async function openRepoModal(repo) {
   title.innerHTML = repoLink(repo);
   modal.classList.remove('hidden');
 
-  let cached = cache[url];
-  if (!cached) {
-    const stored = lsGet(url);
-    if (stored) { cached = { data: stored }; cache[url] = cached; }
-  }
+  const cached = cache[url];
   if (cached) {
     renderRepoModal(cached.data);
   } else {
     body.innerHTML = '<div class="flex items-center gap-3 py-8 justify-center"><div class="spinner"></div><span class="text-gray-400">Loading...</span></div>';
   }
-  // Fetch from server (may return stale cached data with _stale flag)
   const data = await fetchJson(url);
   const isStale = data._stale;
   delete data._stale;
   cache[url] = { data, time: Date.now() };
-  lsSet(url, data);
   if (!cached || JSON.stringify(data) !== JSON.stringify(cached.data)) {
     renderRepoModal(data);
   }
-  // If server returned stale data, re-fetch fresh in background
   if (isStale) {
     $('#refreshing').classList.remove('hidden');
     try {
@@ -605,7 +581,6 @@ async function openRepoModal(repo) {
       const fresh = await fetchJson(url + sep + 'fresh=1');
       delete fresh._stale;
       cache[url] = { data: fresh, time: Date.now() };
-      lsSet(url, fresh);
       if (JSON.stringify(fresh) !== JSON.stringify(data)) {
         renderRepoModal(fresh);
       }
