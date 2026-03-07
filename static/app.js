@@ -76,7 +76,7 @@ function issueUrl(item) {
 }
 
 function repoLink(name) {
-  return `<a href="https://github.com/sil-ai/${name}" target="_blank" class="font-medium text-accent hover:underline">${name}</a>`;
+  return `<a href="https://github.com/sil-ai/${name}" target="_blank" class="font-medium text-accent hover:text-white transition-colors">${name}</a>`;
 }
 
 function escHtml(s) {
@@ -128,17 +128,17 @@ function renderWeekly(data) {
   const isCurrentWeek = weeklyDateStr(weeklyEnd) === weeklyDateStr(new Date());
 
   let html = `<div class="flex items-center gap-4 mb-6">
-    <button id="week-prev" class="bg-panel border border-gray-600 text-gray-300 hover:text-white hover:border-accent px-3 py-1.5 rounded-lg text-sm transition">&larr; Prev Week</button>
+    <button id="week-prev" class="bg-panel border border-border text-muted hover:text-gray-200 hover:border-accent px-3 py-1.5 rounded-lg text-sm transition-colors">&larr; Prev Week</button>
     <div>
       <h2 class="text-2xl font-bold">Weekly Summary</h2>
       <p class="text-gray-500 text-sm">${data.start} to ${data.end}</p>
     </div>
-    <button id="week-next" class="bg-panel border border-gray-600 text-gray-300 hover:text-white hover:border-accent px-3 py-1.5 rounded-lg text-sm transition ${isCurrentWeek ? 'opacity-30 cursor-not-allowed' : ''}" ${isCurrentWeek ? 'disabled' : ''}> Next Week &rarr;</button>
+    <button id="week-next" class="bg-panel border border-border text-muted hover:text-gray-200 hover:border-accent px-3 py-1.5 rounded-lg text-sm transition-colors ${isCurrentWeek ? 'opacity-30 cursor-not-allowed' : ''}" ${isCurrentWeek ? 'disabled' : ''}> Next Week &rarr;</button>
   </div>`;
 
   const commitRepos = Object.keys(data.commits_by_repo || {});
   if (commitRepos.length) {
-    html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+    html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
       <h3 class="text-lg font-semibold mb-3">Recent Changes</h3>`;
     for (const repo of commitRepos) {
       const commits = data.commits_by_repo[repo];
@@ -148,23 +148,18 @@ function renderWeekly(data) {
         ${repoLink(repo)}
         <span class="text-gray-500 text-sm">(${commits.length} commits)</span>
         <span class="text-gray-400 text-sm ml-2">${authors.join(', ')}</span>
-        <div id="${summaryId}" class="ml-1 mt-1 mb-1 text-sm text-gray-300 border-l-2 border-accent/30 pl-3 hidden"></div>
+        <div id="${summaryId}" class="ml-1 mt-1 mb-1 text-sm text-gray-300 border-l-2 border-accent/30 pl-3 hidden"></div>`;
+      const commitsId = `commits-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`;
+      html += `<div id="${commitsId}" class="hidden">
         <ul class="ml-5 mt-1 text-sm text-gray-300 list-disc">`;
       const commitLink = (c) => `<a href="https://github.com/sil-ai/${repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs ml-1">${c.sha}</a>`;
       const commitAuthor = (c) => `<span class="text-gray-500 text-xs ml-1">${escHtml(c.author)}</span>`;
-      for (const c of commits.slice(0, 8)) {
+      for (const c of commits) {
         html += `<li>${escHtml(c.message)}${commitLink(c)}${commitAuthor(c)}</li>`;
       }
-      if (commits.length > 8) {
-        const moreId = `more-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`;
-        html += `<div id="${moreId}" class="hidden">`;
-        for (const c of commits.slice(8)) {
-          html += `<li>${escHtml(c.message)}${commitLink(c)}${commitAuthor(c)}</li>`;
-        }
-        html += `</div>`;
-        html += `<li class="list-none"><a href="#" class="text-accent hover:underline text-sm" onclick="event.preventDefault(); const el = document.getElementById('${moreId}'); el.classList.toggle('hidden'); this.textContent = el.classList.contains('hidden') ? '...and ${commits.length - 8} more' : 'show less'">...and ${commits.length - 8} more</a></li>`;
-      }
       html += `</ul></div>`;
+      html += `<a href="#" class="text-accent hover:underline text-xs ml-1" onclick="event.preventDefault(); const el = document.getElementById('${commitsId}'); el.classList.toggle('hidden'); this.textContent = el.classList.contains('hidden') ? 'show commits' : 'hide commits'">show commits</a>`;
+      html += `</div>`;
     }
     html += `</div>`;
   }
@@ -172,7 +167,7 @@ function renderWeekly(data) {
   html += renderIssueSection('Issues Closed', data.issues_closed, 'closedAt');
   html += renderIssueSection('Issues Opened', data.issues_opened, 'createdAt');
 
-  html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+  html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h3 class="text-lg font-semibold mb-3">PRs Merged (${data.prs_merged.length})</h3>`;
   if (data.prs_merged.length === 0) {
     html += `<p class="text-gray-500">None this week</p>`;
@@ -301,7 +296,7 @@ async function loadWeekly() {
 }
 
 function renderIssueSection(title, issues, dateField) {
-  let html = `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+  let html = `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h3 class="text-lg font-semibold mb-3">${title} (${issues.length})</h3>`;
   if (issues.length === 0) {
     html += `<p class="text-gray-500">None this week</p>`;
@@ -327,7 +322,7 @@ async function loadOverdue() {
     html += renderAgingSection('P0-critical (open &gt; 7 days)', data.aging_p0, 'priority-p0');
     html += renderAgingSection('P1-high (open &gt; 7 days)', data.aging_p1, 'priority-p1');
 
-    html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+    html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
       <h3 class="text-lg font-semibold mb-3">Stale Issues (no activity &gt; 30 days) &mdash; ${data.stale.length}</h3>`;
     if (data.stale.length === 0) {
       html += `<p class="text-gray-500">None</p>`;
@@ -349,7 +344,7 @@ async function loadOverdue() {
 }
 
 function renderAgingSection(title, items, cls) {
-  let html = `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+  let html = `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h3 class="text-lg font-semibold mb-3 ${cls}">${title} &mdash; ${items.length}</h3>`;
   if (items.length === 0) {
     html += `<p class="text-gray-500">None</p>`;
@@ -378,7 +373,7 @@ async function loadPriorities() {
 }
 
 function renderPriorityGroup(label, items, cls) {
-  let html = `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+  let html = `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h3 class="text-lg font-semibold mb-3 ${cls}">${label} (${items.length})</h3>`;
   if (items.length === 0) {
     html += `<p class="text-gray-500">No open issues</p>`;
@@ -388,7 +383,7 @@ function renderPriorityGroup(label, items, cls) {
       html += `<div class="mb-3">${repoLink(repo)}
         <table class="w-full mt-1 text-sm"><tbody>`;
       for (const item of issues) {
-        html += `<tr class="border-t border-gray-700">
+        html += `<tr class="border-t border-border">
           <td class="py-1"><a href="${issueUrl(item)}" target="_blank" class="hover:text-accent">${escHtml(item.title)}</a></td>
           <td class="py-1 text-gray-500 text-right w-24">${daysAgo(item.createdAt)}d old</td>
           <td class="py-1 text-gray-400 text-right w-32">${assigneeStr(item.assignees)}</td>
@@ -418,13 +413,13 @@ async function loadPrStatus() {
     const sortedRepos = Object.entries(byRepo).sort((a, b) => b[1].length - a[1].length);
 
     for (const [repo, repoPrs] of sortedRepos) {
-      html += `<div class="bg-panel rounded-xl p-5 mb-4 border border-gray-700">
+      html += `<div class="bg-panel rounded-xl p-5 mb-4 border border-border">
         <h3 class="text-lg font-semibold mb-3">${repoLink(repo)} <span class="text-gray-500 text-sm">(${repoPrs.length})</span></h3>
         <table class="w-full text-sm"><tbody>`;
       for (const pr of repoPrs) {
         const age = daysAgo(pr.createdAt);
         const ageColor = age > 14 ? 'text-red-400' : age > 7 ? 'text-yellow-400' : 'text-gray-500';
-        const draft = pr.isDraft ? '<span class="text-gray-500 bg-gray-700 rounded px-1.5 py-0.5 text-xs ml-1">draft</span>' : '';
+        const draft = pr.isDraft ? '<span class="text-gray-500 bg-white/5 rounded px-1.5 py-0.5 text-xs ml-1">draft</span>' : '';
 
         const reviewBadges = (pr.reviews || []).map(r => {
           const colors = { 'APPROVED': 'text-green-400', 'CHANGES_REQUESTED': 'text-red-400', 'COMMENTED': 'text-blue-400', 'DISMISSED': 'text-gray-500' };
@@ -440,7 +435,7 @@ async function loadPrStatus() {
 
         const reviewCol = [reviewBadges, waiting].filter(Boolean).join(' ') || '<span class="text-gray-600 text-xs">no reviewers</span>';
 
-        html += `<tr class="border-t border-gray-700">
+        html += `<tr class="border-t border-border">
           <td class="py-1.5"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">${escHtml(pr.title)}</a>${draft}</td>
           <td class="py-1.5 text-gray-400 text-right w-28">@${pr.author?.login || '?'}</td>
           <td class="py-1.5 text-right">${reviewCol}</td>
@@ -479,8 +474,8 @@ function renderRepoCards(summaries) {
 
   let html = `<h2 class="text-2xl font-bold mb-4">Repo Status</h2>
     <div class="flex flex-wrap gap-2 mb-6">
-      <button class="project-btn px-3 py-1.5 rounded-lg text-sm font-medium transition ${!activeProject ? 'bg-accent text-white' : 'bg-panel border border-gray-600 text-gray-400 hover:text-white'}" data-project="">All</button>
-      ${Object.keys(projects).map(p => `<button class="project-btn px-3 py-1.5 rounded-lg text-sm font-medium transition ${activeProject === p ? 'bg-accent text-white' : 'bg-panel border border-gray-600 text-gray-400 hover:text-white'}" data-project="${p}">${p} <span class="text-xs opacity-60">${projects[p].length}</span></button>`).join('')}
+      <button class="project-btn px-3 py-1.5 rounded-lg text-sm font-medium transition ${!activeProject ? 'bg-accent/90 text-white' : 'bg-panel border border-border text-muted hover:text-gray-200 hover:border-accent/30'}" data-project="">All</button>
+      ${Object.keys(projects).map(p => `<button class="project-btn px-3 py-1.5 rounded-lg text-sm font-medium transition ${activeProject === p ? 'bg-accent/90 text-white' : 'bg-panel border border-border text-muted hover:text-gray-200 hover:border-accent/30'}" data-project="${p}">${p} <span class="text-xs opacity-60">${projects[p].length}</span></button>`).join('')}
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">`;
 
@@ -489,7 +484,7 @@ function renderRepoCards(summaries) {
   for (const repo of filtered) {
     const hasP0 = repo.p0 > 0;
     const hasP1 = repo.p1 > 0;
-    const border = hasP0 ? 'border-red-500/50' : hasP1 ? 'border-yellow-500/30' : 'border-gray-700';
+    const border = hasP0 ? 'border-red-500/40' : hasP1 ? 'border-yellow-500/25' : 'border-border';
     const lastCommit = repo.last_commit ? timeAgo(repo.last_commit) : '';
 
     let issueList = '';
@@ -506,7 +501,7 @@ function renderRepoCards(summaries) {
       prList += `<div class="truncate text-xs text-gray-300">${draft}<a href="${p.url}" target="_blank" class="hover:text-accent" onclick="event.stopPropagation()">#${p.number}</a> ${escHtml(p.title)} <span class="text-gray-500">@${p.author}</span></div>`;
     }
 
-    html += `<div class="bg-panel rounded-xl p-4 border ${border} cursor-pointer hover:border-accent transition repo-card" data-repo="${repo.name}">
+    html += `<div class="bg-panel rounded-xl p-4 border ${border} cursor-pointer hover:border-accent/50 hover:shadow-lg hover:shadow-black/10 transition-all duration-200 repo-card" data-repo="${repo.name}">
       <div class="flex items-center justify-between mb-2">
         <div class="font-semibold text-white truncate">${repo.name}</div>
         ${lastCommit ? `<span class="text-xs text-gray-500 whitespace-nowrap ml-2">${lastCommit}</span>` : ''}
@@ -519,13 +514,13 @@ function renderRepoCards(summaries) {
         <span class="flex items-end gap-px ml-auto h-4" title="Commits: last 4 weeks">${
           (repo.week_commits || [0,0,0,0]).slice().reverse().map(c => {
             const h = c === 0 ? 2 : Math.max(4, Math.round((c / maxWeek) * 16));
-            const color = c === 0 ? 'bg-gray-700' : 'bg-accent/70';
+            const color = c === 0 ? 'bg-white/5' : 'bg-accent/60';
             return `<span class="${color} rounded-sm" style="width:4px;height:${h}px"></span>`;
           }).join('')
         }</span>
       </div>
-      ${issueList ? `<div class="border-t border-gray-700 pt-2 mt-1 space-y-0.5">${issueList}</div>` : ''}
-      ${prList ? `<div class="border-t border-gray-700 pt-2 mt-1 space-y-0.5">${prList}</div>` : ''}
+      ${issueList ? `<div class="border-t border-border pt-2 mt-1 space-y-0.5">${issueList}</div>` : ''}
+      ${prList ? `<div class="border-t border-border pt-2 mt-1 space-y-0.5">${prList}</div>` : ''}
     </div>`;
   }
 
@@ -548,19 +543,80 @@ async function openRepoModal(repo) {
   const modal = $('#modal');
   const title = $('#modal-title');
   const body = $('#modal-body');
+  const url = `/api/repo-status/${repo}`;
 
   title.innerHTML = repoLink(repo);
-  body.innerHTML = '<div class="flex items-center gap-3 py-8 justify-center"><div class="spinner"></div><span class="text-gray-400">Loading...</span></div>';
   modal.classList.remove('hidden');
 
-  const data = await fetchJson(`/api/repo-status/${repo}`);
-  renderRepoModal(data);
+  const cached = cache[url];
+  if (cached) {
+    renderRepoModal(cached.data);
+    // Show refreshing indicator and fetch fresh data
+    $('#refreshing').classList.remove('hidden');
+    try {
+      const fresh = await fetchJson(url);
+      cache[url] = { data: fresh, time: Date.now() };
+      $('#refreshing').classList.add('hidden');
+      if (JSON.stringify(fresh) !== JSON.stringify(cached.data)) {
+        renderRepoModal(fresh);
+      }
+    } catch { $('#refreshing').classList.add('hidden'); }
+  } else {
+    body.innerHTML = '<div class="flex items-center gap-3 py-8 justify-center"><div class="spinner"></div><span class="text-gray-400">Loading...</span></div>';
+    const data = await fetchJson(url);
+    cache[url] = { data: data, time: Date.now() };
+    renderRepoModal(data);
+  }
 }
 
 function renderRepoModal(data) {
   const body = $('#modal-body');
   let html = '';
 
+  // Recent Changes first
+  const branches = Object.keys(data.branch_commits || {});
+  if (branches.length) {
+    html += `<div class="mb-6">
+      <h4 class="font-semibold mb-3">Recent Changes</h4>
+      <div id="modal-commit-summary" class="mb-3 text-sm text-gray-300 border-l-2 border-accent/30 pl-3 hidden"></div>
+      <a href="#" class="text-accent hover:underline text-xs" onclick="event.preventDefault(); const el = document.getElementById('modal-commits-detail'); el.classList.toggle('hidden'); this.textContent = el.classList.contains('hidden') ? 'show commits' : 'hide commits'">show commits</a>
+      <div id="modal-commits-detail" class="hidden">`;
+    for (const branch of branches) {
+      const commits = data.branch_commits[branch];
+      html += `<div class="mb-3 mt-2">
+        <span class="text-sm font-mono bg-white/5 text-gray-300 rounded px-2 py-0.5">${escHtml(branch)}</span>
+        <ul class="ml-5 mt-1 text-sm list-disc space-y-0.5">`;
+      for (const c of commits) {
+        html += `<li>
+          <a href="https://github.com/sil-ai/${data.repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs">${c.sha}</a>
+          ${escHtml(c.message)}
+          <span class="text-gray-500 text-xs">${c.author} - ${fmtDate(c.date)}</span>
+        </li>`;
+      }
+      html += `</ul></div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // Open PRs
+  html += `<div class="mb-6">
+    <h4 class="font-semibold mb-3">Open PRs (${data.prs.length})</h4>`;
+  if (data.prs.length === 0) {
+    html += `<p class="text-gray-500">None</p>`;
+  } else {
+    html += `<table class="w-full text-sm"><tbody>`;
+    for (const pr of data.prs) {
+      html += `<tr class="border-t border-border">
+        <td class="py-1"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">#${pr.number} ${escHtml(pr.title)}</a>${pr.isDraft ? ' <span class="text-gray-500 bg-white/5 rounded px-1.5 py-0.5 text-xs">draft</span>' : ''}</td>
+        <td class="py-1 text-gray-400 text-right">@${pr.author?.login || '?'}</td>
+        <td class="py-1 text-gray-500 text-right w-24">${daysAgo(pr.createdAt)}d</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+
+  // Open Issues
   const byPriority = { 'P0-critical': [], 'P1-high': [], 'P2-important': [], 'P3-strategic': [], 'No priority': [] };
   for (const issue of data.issues) {
     let found = false;
@@ -587,32 +643,16 @@ function renderRepoModal(data) {
   }
   html += `</div>`;
 
-  html += `<div class="mb-6">
-    <h4 class="font-semibold mb-3">Open PRs (${data.prs.length})</h4>`;
-  if (data.prs.length === 0) {
-    html += `<p class="text-gray-500">None</p>`;
-  } else {
-    html += `<table class="w-full text-sm"><tbody>`;
-    for (const pr of data.prs) {
-      html += `<tr class="border-t border-gray-700">
-        <td class="py-1"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">#${pr.number} ${escHtml(pr.title)}</a>${pr.isDraft ? ' <span class="text-gray-500 bg-gray-700 rounded px-1.5 py-0.5 text-xs">draft</span>' : ''}</td>
-        <td class="py-1 text-gray-400 text-right">@${pr.author?.login || '?'}</td>
-        <td class="py-1 text-gray-500 text-right w-24">${daysAgo(pr.createdAt)}d</td>
-      </tr>`;
-    }
-    html += `</tbody></table>`;
-  }
-  html += `</div>`;
-
+  // Milestones
   if (data.milestones && data.milestones.length) {
     html += `<div class="mb-6">
       <h4 class="font-semibold mb-3">Milestones</h4>
-      <table class="w-full text-sm"><thead><tr class="text-gray-500 border-b border-gray-700">
+      <table class="w-full text-sm"><thead><tr class="text-gray-500 border-b border-border">
         <th class="text-left py-1">Milestone</th><th class="text-right py-1">Due</th><th class="text-right py-1">Open</th><th class="text-right py-1">Closed</th>
       </tr></thead><tbody>`;
     for (const m of data.milestones) {
       const overdue = m.due_on && new Date(m.due_on) < new Date() ? 'text-red-400' : '';
-      html += `<tr class="border-t border-gray-700">
+      html += `<tr class="border-t border-border">
         <td class="py-1">${escHtml(m.title)}</td>
         <td class="py-1 text-right ${overdue}">${m.due_on ? fmtDate(m.due_on) : 'No date'}</td>
         <td class="py-1 text-right">${m.open_issues}</td>
@@ -622,6 +662,7 @@ function renderRepoModal(data) {
     html += `</tbody></table></div>`;
   }
 
+  // Recently Closed
   html += `<div class="mb-6">
     <h4 class="font-semibold mb-3">Recently Closed (14 days)</h4>`;
   if (data.recent_closed.length === 0) {
@@ -634,28 +675,6 @@ function renderRepoModal(data) {
     html += `</ul>`;
   }
   html += `</div>`;
-
-  const branches = Object.keys(data.branch_commits || {});
-  if (branches.length) {
-    html += `<div class="mb-2">
-      <h4 class="font-semibold mb-3">Recent Changes</h4>
-      <div id="modal-commit-summary" class="mb-3 text-sm text-gray-300 border-l-2 border-accent/30 pl-3 hidden"></div>`;
-    for (const branch of branches) {
-      const commits = data.branch_commits[branch];
-      html += `<div class="mb-3">
-        <span class="text-sm font-mono bg-gray-700/50 text-gray-300 rounded px-2 py-0.5">${escHtml(branch)}</span>
-        <ul class="ml-5 mt-1 text-sm list-disc space-y-0.5">`;
-      for (const c of commits) {
-        html += `<li>
-          <a href="https://github.com/sil-ai/${data.repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs">${c.sha}</a>
-          ${escHtml(c.message)}
-          <span class="text-gray-500 text-xs">${c.author} - ${fmtDate(c.date)}</span>
-        </li>`;
-      }
-      html += `</ul></div>`;
-    }
-    html += `</div>`;
-  }
 
   body.innerHTML = html;
 
@@ -697,11 +716,11 @@ async function loadMyTasks() {
 
   let html = `<h2 class="text-2xl font-bold mb-4">My Tasks</h2>
     <div class="mb-6">
-      <select id="member-select" class="bg-panel border border-gray-600 text-gray-200 rounded-lg px-4 py-2 w-72">
+      <select id="member-select" class="bg-panel border border-border text-gray-200 rounded-lg px-4 py-2 w-72">
         <option value="">Select a team member...</option>
         ${orgMembers.map(m => `<option value="${m}" ${m === saved ? 'selected' : ''}>${m}</option>`).join('')}
       </select>
-      <button id="member-load-btn" class="ml-2 bg-accent text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition">Load</button>
+      <button id="member-load-btn" class="ml-2 bg-accent/90 text-white px-4 py-2 rounded-lg hover:bg-accent transition-colors">Load</button>
     </div>
     <div id="member-content"></div>`;
   content.innerHTML = html;
@@ -727,7 +746,7 @@ function renderMyTasksData(user, data) {
   const el = $('#member-content');
   let html = `<h3 class="text-xl font-semibold mb-4">@${user}</h3>`;
 
-  html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+  html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h4 class="font-semibold mb-3">Assigned Issues (${data.issues.length})</h4>`;
   if (data.issues.length === 0) {
     html += `<p class="text-gray-500">No open issues assigned</p>`;
@@ -746,7 +765,7 @@ function renderMyTasksData(user, data) {
   }
   html += `</div>`;
 
-  html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-gray-700">
+  html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h4 class="font-semibold mb-3">Open PRs (${data.prs.length})</h4>`;
   if (data.prs.length === 0) {
     html += `<p class="text-gray-500">No open PRs</p>`;
@@ -778,9 +797,9 @@ const tabHandlers = {
 };
 
 function activateTab(tab) {
-  $$('.tab-btn').forEach(b => { b.classList.remove('active'); b.classList.add('text-gray-400'); });
+  $$('.tab-btn').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
-  if (btn) { btn.classList.add('active'); btn.classList.remove('text-gray-400'); }
+  if (btn) btn.classList.add('active');
   tabHandlers[tab]();
 }
 
