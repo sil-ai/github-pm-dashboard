@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -192,6 +193,11 @@ async def api_org_members():
 
 @app.get("/api/weekly")
 async def api_weekly(start: str = "", end: str = ""):
+    cache_url = f"/api/weekly?start={start}&end={end}"
+    cached = _api_cache_get(cache_url)
+    if cached:
+        return JSONResponse(cached)
+
     # Default: last 7 days ending today
     if end:
         end_dt = datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -252,14 +258,16 @@ async def api_weekly(start: str = "", end: str = ""):
         )
     commits_by_repo = {repo: commits for repo, commits in results if commits}
 
-    return JSONResponse({
+    result = {
         "start": start_str,
         "end": end_str,
         "issues_closed": issues_closed,
         "issues_opened": issues_opened,
         "prs_merged": prs_merged,
         "commits_by_repo": commits_by_repo,
-    })
+    }
+    _api_cache_set(cache_url, result)
+    return JSONResponse(result)
 
 
 @app.get("/api/overdue")
@@ -318,6 +326,11 @@ async def api_priorities():
 
 @app.get("/api/repo-status/{repo}")
 async def api_repo_status(repo: str, start: str = "", end: str = ""):
+    cache_url = f"/api/repo-status/{repo}?start={start}&end={end}"
+    cached = _api_cache_get(cache_url)
+    if cached:
+        return JSONResponse(cached)
+
     issues = run_gh_json([
         "issue", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
         "--json", "number,title,labels,assignees,createdAt,updatedAt,milestone,url",
@@ -404,14 +417,16 @@ async def api_repo_status(repo: str, start: str = "", end: str = ""):
         except Exception:
             pass
 
-    return JSONResponse({
+    result = {
         "repo": repo,
         "issues": issues,
         "prs": prs,
         "milestones": milestones,
         "recent_closed": recent_closed,
         "branch_commits": branch_commits,
-    })
+    }
+    _api_cache_set(cache_url, result)
+    return JSONResponse(result)
 
 
 @app.get("/api/pr-status")
@@ -494,11 +509,37 @@ def _init_cache_db():
         "CREATE TABLE IF NOT EXISTS summaries "
         "(hash TEXT PRIMARY KEY, summary TEXT, created_at TEXT)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS api_cache "
+        "(url TEXT PRIMARY KEY, data TEXT, created_at REAL)"
+    )
     conn.commit()
     conn.close()
 
 
 _init_cache_db()
+
+
+API_CACHE_TTL = 5 * 60  # 5 minutes
+
+
+def _api_cache_get(url: str) -> dict | None:
+    conn = sqlite3.connect(_db_path)
+    row = conn.execute("SELECT data, created_at FROM api_cache WHERE url = ?", (url,)).fetchone()
+    conn.close()
+    if row and (time.time() - row[1]) < API_CACHE_TTL:
+        return json.loads(row[0])
+    return None
+
+
+def _api_cache_set(url: str, data: dict):
+    conn = sqlite3.connect(_db_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO api_cache (url, data, created_at) VALUES (?, ?, ?)",
+        (url, json.dumps(data), time.time()),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _cache_get(key: str) -> str | None:

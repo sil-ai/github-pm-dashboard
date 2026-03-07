@@ -840,11 +840,35 @@ $('#range-next').addEventListener('click', () => {
   onRangeChange();
 });
 $('#range-period').addEventListener('change', (e) => {
-  rangeDays = parseInt(e.target.value);
+  const val = e.target.value;
+  const customPanel = $('#custom-dates');
+  const navControls = $('#range-nav');
+  if (val === 'custom') {
+    customPanel.classList.remove('hidden');
+    navControls.classList.add('hidden');
+    $('#range-start-input').value = dateStr(rangeStart);
+    $('#range-end-input').value = dateStr(rangeEnd);
+    return;
+  }
+  customPanel.classList.add('hidden');
+  navControls.classList.remove('hidden');
+  rangeDays = parseInt(val);
   rangeEnd = new Date();
   rangeStart = new Date(rangeEnd.getTime() - rangeDays * 86400000);
   onRangeChange();
 });
+$('#range-start-input').addEventListener('change', applyCustomDates);
+$('#range-end-input').addEventListener('change', applyCustomDates);
+function applyCustomDates() {
+  const s = $('#range-start-input').value;
+  const e = $('#range-end-input').value;
+  if (!s || !e) return;
+  rangeStart = new Date(s + 'T00:00:00');
+  rangeEnd = new Date(e + 'T00:00:00');
+  if (rangeEnd < rangeStart) { rangeEnd = new Date(rangeStart); }
+  rangeDays = Math.round((rangeEnd - rangeStart) / 86400000);
+  onRangeChange();
+}
 
 function onRangeChange() {
   updateRangeLabel();
