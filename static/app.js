@@ -97,20 +97,34 @@ let fetchGen = 0;
 async function fetchCached(url, onData) {
   const gen = ++fetchGen;
   const cached = cache[url];
-  let showedCached = false;
   if (cached) {
     onData(cached.data, true);
-    showedCached = true;
-    $('#refreshing').classList.remove('hidden');
+  } else {
+    showLoading();
   }
-  if (!showedCached) showLoading();
-  const fresh = await fetchJson(url);
-  cache[url] = { data: fresh, time: Date.now() };
+  // Fetch from server (may return stale cached data with _stale flag)
+  const data = await fetchJson(url);
   hideLoading();
-  $('#refreshing').classList.add('hidden');
   if (gen !== fetchGen) return;
-  if (!cached || JSON.stringify(fresh) !== JSON.stringify(cached.data)) {
-    onData(fresh, false);
+  const isStale = data._stale;
+  delete data._stale;
+  cache[url] = { data, time: Date.now() };
+  if (!cached || JSON.stringify(data) !== JSON.stringify(cached.data)) {
+    onData(data, false);
+  }
+  // If server returned stale data, re-fetch fresh in background
+  if (isStale) {
+    $('#refreshing').classList.remove('hidden');
+    try {
+      const sep = url.includes('?') ? '&' : '?';
+      const fresh = await fetchJson(url + sep + 'fresh=1');
+      delete fresh._stale;
+      cache[url] = { data: fresh, time: Date.now() };
+      if (gen === fetchGen && JSON.stringify(fresh) !== JSON.stringify(data)) {
+        onData(fresh, false);
+      }
+    } catch {}
+    $('#refreshing').classList.add('hidden');
   }
 }
 
@@ -552,21 +566,30 @@ async function openRepoModal(repo) {
   const cached = cache[url];
   if (cached) {
     renderRepoModal(cached.data);
-    // Show refreshing indicator and fetch fresh data
-    $('#refreshing').classList.remove('hidden');
-    try {
-      const fresh = await fetchJson(url);
-      cache[url] = { data: fresh, time: Date.now() };
-      $('#refreshing').classList.add('hidden');
-      if (JSON.stringify(fresh) !== JSON.stringify(cached.data)) {
-        renderRepoModal(fresh);
-      }
-    } catch { $('#refreshing').classList.add('hidden'); }
   } else {
     body.innerHTML = '<div class="flex items-center gap-3 py-8 justify-center"><div class="spinner"></div><span class="text-gray-400">Loading...</span></div>';
-    const data = await fetchJson(url);
-    cache[url] = { data: data, time: Date.now() };
+  }
+  // Fetch from server (may return stale cached data with _stale flag)
+  const data = await fetchJson(url);
+  const isStale = data._stale;
+  delete data._stale;
+  cache[url] = { data, time: Date.now() };
+  if (!cached || JSON.stringify(data) !== JSON.stringify(cached.data)) {
     renderRepoModal(data);
+  }
+  // If server returned stale data, re-fetch fresh in background
+  if (isStale) {
+    $('#refreshing').classList.remove('hidden');
+    try {
+      const sep = url.includes('?') ? '&' : '?';
+      const fresh = await fetchJson(url + sep + 'fresh=1');
+      delete fresh._stale;
+      cache[url] = { data: fresh, time: Date.now() };
+      if (JSON.stringify(fresh) !== JSON.stringify(data)) {
+        renderRepoModal(fresh);
+      }
+    } catch {}
+    $('#refreshing').classList.add('hidden');
   }
 }
 

@@ -192,10 +192,12 @@ async def api_org_members():
 
 
 @app.get("/api/weekly")
-async def api_weekly(start: str = "", end: str = ""):
+async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
     cache_url = f"/api/weekly?start={start}&end={end}"
-    cached = _api_cache_get(cache_url)
-    if cached:
+    cached, is_stale = _api_cache_get(cache_url)
+    if cached and not fresh:
+        if is_stale:
+            cached["_stale"] = True
         return JSONResponse(cached)
 
     # Default: last 7 days ending today
@@ -325,10 +327,12 @@ async def api_priorities():
 
 
 @app.get("/api/repo-status/{repo}")
-async def api_repo_status(repo: str, start: str = "", end: str = ""):
+async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str = ""):
     cache_url = f"/api/repo-status/{repo}?start={start}&end={end}"
-    cached = _api_cache_get(cache_url)
-    if cached:
+    cached, is_stale = _api_cache_get(cache_url)
+    if cached and not fresh:
+        if is_stale:
+            cached["_stale"] = True
         return JSONResponse(cached)
 
     issues = run_gh_json([
@@ -520,16 +524,21 @@ def _init_cache_db():
 _init_cache_db()
 
 
-API_CACHE_TTL = 5 * 60  # 5 minutes
+API_CACHE_FRESH = 5 * 60       # 5 min: serve without revalidation
+API_CACHE_MAX_AGE = 24 * 3600  # 24h: serve stale while revalidating
 
 
-def _api_cache_get(url: str) -> dict | None:
+def _api_cache_get(url: str) -> tuple[dict | None, bool]:
+    """Return (data, is_stale). Returns None data if nothing cached or expired beyond max age."""
     conn = sqlite3.connect(_db_path)
     row = conn.execute("SELECT data, created_at FROM api_cache WHERE url = ?", (url,)).fetchone()
     conn.close()
-    if row and (time.time() - row[1]) < API_CACHE_TTL:
-        return json.loads(row[0])
-    return None
+    if not row:
+        return None, True
+    age = time.time() - row[1]
+    if age > API_CACHE_MAX_AGE:
+        return None, True
+    return json.loads(row[0]), age > API_CACHE_FRESH
 
 
 def _api_cache_set(url: str, data: dict):
