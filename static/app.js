@@ -36,11 +36,11 @@ function repoName(r) {
 }
 
 let displayNames = {};
+const displayNamesReady = fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
 function displayName(login) {
   const name = displayNames[login] || `@${login}`;
   return `<span class="inline-block bg-white/8 text-gray-300 rounded-full px-2 py-0.5 text-xs font-medium">${name}</span>`;
 }
-fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
 
 function assigneeStr(assignees) {
   if (!assignees || !assignees.length) return '<span class="text-gray-500">unassigned</span>';
@@ -906,6 +906,7 @@ function onRangeChange() {
 // Init
 $('#timestamp').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 updateRangeLabel();
-const initTab = location.hash.slice(1) || 'summary';
-// Support old #weekly URLs
-activateTab(tabHandlers[initTab] ? initTab : 'summary');
+displayNamesReady.then(() => {
+  const initTab = location.hash.slice(1) || 'summary';
+  activateTab(tabHandlers[initTab] ? initTab : 'summary');
+});
