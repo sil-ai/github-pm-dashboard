@@ -387,11 +387,12 @@ async def api_repo_status(repo: str):
         [b for b in branches if b.startswith("release") and b not in target_branches]
     )
 
+    thirty_days_ago = since_date(30)
     branch_commits: dict[str, list] = {}
     for branch in target_branches:
         try:
             raw = run_gh([
-                "api", f"repos/sil-ai/{repo}/commits?sha={branch}&per_page=10",
+                "api", f"repos/sil-ai/{repo}/commits?sha={branch}&since={thirty_days_ago}T00:00:00Z&per_page=100",
                 "-q", '.[] | {sha: .sha[:7], date: .commit.author.date, author: (.author.login // .commit.author.name), message: (.commit.message | split("\n")[0])}',
             ], timeout=10)
             if raw:

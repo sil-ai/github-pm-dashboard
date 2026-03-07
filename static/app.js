@@ -687,26 +687,33 @@ function renderRepoModal(data) {
 
   body.innerHTML = html;
 
-  // Fetch AI summary for modal commits
+  // Fetch AI summary for modal commits (with client-side cache)
   if (branches.length) {
     const allCommits = branches.flatMap(b => data.branch_commits[b] || []);
     if (allCommits.length) {
       const el = document.getElementById('modal-commit-summary');
+      const cacheKey = 'modal:' + data.repo + ':' + allCommits.map(c => c.sha).join(',');
       if (el) {
-        el.innerHTML = '<span class="text-gray-500 text-xs">Generating summary...</span>';
-        el.classList.remove('hidden');
-        fetch('/api/summarize-commits', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ repos: [{ repo: data.repo, commits: allCommits, merged_prs: [] }] }),
-        }).then(r => r.ok ? r.json() : null).then(result => {
-          const summary = result?.summaries?.[data.repo];
-          if (summary && el) {
-            el.innerHTML = renderSummaryHtml(summary);
-          } else if (el) {
-            el.classList.add('hidden');
-          }
-        }).catch(() => { if (el) el.classList.add('hidden'); });
+        if (summaryCache[cacheKey]) {
+          el.innerHTML = renderSummaryHtml(summaryCache[cacheKey]);
+          el.classList.remove('hidden');
+        } else {
+          el.innerHTML = '<span class="text-gray-500 text-xs">Generating summary...</span>';
+          el.classList.remove('hidden');
+          fetch('/api/summarize-commits', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repos: [{ repo: data.repo, commits: allCommits, merged_prs: [] }] }),
+          }).then(r => r.ok ? r.json() : null).then(result => {
+            const summary = result?.summaries?.[data.repo];
+            if (summary && el) {
+              summaryCache[cacheKey] = summary;
+              el.innerHTML = renderSummaryHtml(summary);
+            } else if (el) {
+              el.classList.add('hidden');
+            }
+          }).catch(() => { if (el) el.classList.add('hidden'); });
+        }
       }
     }
   }
