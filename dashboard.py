@@ -191,6 +191,14 @@ async def api_org_members():
     return JSONResponse(sorted(members))
 
 
+@app.get("/api/display-names")
+async def api_display_names():
+    names_file = Path(__file__).parent / "display_names.json"
+    if names_file.exists():
+        return JSONResponse(json.loads(names_file.read_text()))
+    return JSONResponse({})
+
+
 @app.get("/api/weekly")
 async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
     cache_url = f"/api/weekly?start={start}&end={end}"

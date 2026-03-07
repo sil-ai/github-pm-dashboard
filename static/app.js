@@ -35,9 +35,13 @@ function repoName(r) {
   return r?.name || r?.fullName?.split('/')[1] || 'unknown';
 }
 
+let displayNames = {};
+function displayName(login) { return displayNames[login] || `@${login}`; }
+fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
+
 function assigneeStr(assignees) {
   if (!assignees || !assignees.length) return '<span class="text-gray-500">unassigned</span>';
-  return assignees.map(a => `@${a.login || a}`).join(', ');
+  return assignees.map(a => displayName(a.login || a)).join(', ');
 }
 
 function priorityClass(labels) {
@@ -164,7 +168,7 @@ function renderSummary(data) {
       <h3 class="text-lg font-semibold mb-3">Recent Changes</h3>`;
     for (const repo of commitRepos) {
       const commits = data.commits_by_repo[repo];
-      const authors = [...new Set(commits.map(c => c.author))];
+      const authors = [...new Set(commits.map(c => displayName(c.author)))];
       const summaryId = `summary-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`;
       html += `<div class="mb-3">
         ${repoLink(repo)}
@@ -175,7 +179,7 @@ function renderSummary(data) {
       html += `<div id="${commitsId}" class="hidden">
         <ul class="ml-5 mt-1 text-sm text-gray-300 list-disc">`;
       const commitLink = (c) => `<a href="https://github.com/sil-ai/${repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs ml-1">${c.sha}</a>`;
-      const commitAuthor = (c) => `<span class="text-gray-500 text-xs ml-1">${escHtml(c.author)}</span>`;
+      const commitAuthor = (c) => `<span class="text-gray-500 text-xs ml-1">${escHtml(displayName(c.author))}</span>`;
       for (const c of commits) {
         html += `<li>${escHtml(c.message)}${commitLink(c)}${commitAuthor(c)}</li>`;
       }
@@ -198,7 +202,7 @@ function renderSummary(data) {
     for (const [repo, prs] of Object.entries(prsByRepo)) {
       html += `<div class="mb-2">${repoLink(repo)}<ul class="ml-5 text-sm list-disc">`;
       for (const pr of prs) {
-        html += `<li>${escHtml(pr.title)} <span class="text-gray-500">@${pr.author?.login || 'unknown'}</span></li>`;
+        html += `<li>${escHtml(pr.title)} <span class="text-gray-500">${displayName(pr.author?.login || 'unknown')}</span></li>`;
       }
       html += `</ul></div>`;
     }
@@ -439,7 +443,7 @@ async function loadPrStatus() {
           const icons = { 'APPROVED': 'ok', 'CHANGES_REQUESTED': 'chg', 'COMMENTED': 'cmt', 'DISMISSED': 'dis' };
           const cls = colors[r.state] || 'text-gray-400';
           const icon = icons[r.state] || r.state;
-          return `<span class="${cls} text-xs" title="${r.state}">@${r.user} <span class="opacity-60">${icon}</span></span>`;
+          return `<span class="${cls} text-xs" title="${r.state}">${displayName(r.user)} <span class="opacity-60">${icon}</span></span>`;
         }).join(' ');
 
         const waiting = (pr.requested_reviewers || []).map(u =>
@@ -450,7 +454,7 @@ async function loadPrStatus() {
 
         html += `<tr class="border-t border-border">
           <td class="py-1.5"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">${escHtml(pr.title)}</a>${draft}</td>
-          <td class="py-1.5 text-gray-400 text-right w-28">@${pr.author?.login || '?'}</td>
+          <td class="py-1.5 text-gray-400 text-right w-28">${displayName(pr.author?.login || '?')}</td>
           <td class="py-1.5 text-right">${reviewCol}</td>
           <td class="py-1.5 ${ageColor} text-right w-16">${age}d</td>
         </tr>`;
@@ -511,7 +515,7 @@ function renderRepoCards(summaries) {
     let prList = '';
     for (const p of (repo.top_prs || [])) {
       const draft = p.isDraft ? '<span class="text-gray-500 text-xs">[draft]</span> ' : '';
-      prList += `<div class="truncate text-xs text-gray-300">${draft}<a href="${p.url}" target="_blank" class="hover:text-accent" onclick="event.stopPropagation()">#${p.number}</a> ${escHtml(p.title)} <span class="text-gray-500">@${p.author}</span></div>`;
+      prList += `<div class="truncate text-xs text-gray-300">${draft}<a href="${p.url}" target="_blank" class="hover:text-accent" onclick="event.stopPropagation()">#${p.number}</a> ${escHtml(p.title)} <span class="text-gray-500">${displayName(p.author)}</span></div>`;
     }
 
     html += `<div class="bg-panel rounded-xl p-4 border ${border} cursor-pointer hover:border-accent/50 hover:shadow-lg hover:shadow-black/10 transition-all duration-200 repo-card" data-repo="${repo.name}">
@@ -610,7 +614,7 @@ function renderRepoModal(data) {
         html += `<li>
           <a href="https://github.com/sil-ai/${data.repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs">${c.sha}</a>
           ${escHtml(c.message)}
-          <span class="text-gray-500 text-xs">${c.author} - ${fmtDate(c.date)}</span>
+          <span class="text-gray-500 text-xs">${displayName(c.author)} - ${fmtDate(c.date)}</span>
         </li>`;
       }
       html += `</ul></div>`;
@@ -628,7 +632,7 @@ function renderRepoModal(data) {
     for (const pr of data.prs) {
       html += `<tr class="border-t border-border">
         <td class="py-1"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">#${pr.number} ${escHtml(pr.title)}</a>${pr.isDraft ? ' <span class="text-gray-500 bg-white/5 rounded px-1.5 py-0.5 text-xs">draft</span>' : ''}</td>
-        <td class="py-1 text-gray-400 text-right">@${pr.author?.login || '?'}</td>
+        <td class="py-1 text-gray-400 text-right">${displayName(pr.author?.login || '?')}</td>
         <td class="py-1 text-gray-500 text-right w-24">${timeAgo(pr.createdAt)}</td>
       </tr>`;
     }
@@ -766,7 +770,7 @@ async function loadMyTasks() {
 
 function renderMyTasksData(user, data) {
   const el = $('#member-content');
-  let html = `<h3 class="text-xl font-semibold mb-4">@${user}</h3>`;
+  let html = `<h3 class="text-xl font-semibold mb-4">${displayName(user)}</h3>`;
 
   html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h4 class="font-semibold mb-3">Assigned Issues (${data.issues.length})</h4>`;
