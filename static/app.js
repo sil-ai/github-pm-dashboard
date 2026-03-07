@@ -272,17 +272,26 @@ async function fetchCommitSummaries(data) {
   }
 }
 
+function renderSummaryHtml(summary) {
+  const lines = summary.split('\n').filter(l => l.trim());
+  let html = '';
+  for (const line of lines) {
+    const isNested = /^\s{2,}[-•*]/.test(line);
+    const text = line.replace(/^\s*[-•*]\s*/, '');
+    if (isNested) {
+      html += `<div class="ml-4 text-gray-400">– ${escHtml(text)}</div>`;
+    } else {
+      html += `<div class="font-medium text-gray-200">• ${escHtml(text)}</div>`;
+    }
+  }
+  return html;
+}
+
 function injectSummaries(summaries) {
   for (const [repo, summary] of Object.entries(summaries)) {
     const el = document.getElementById(`summary-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`);
     if (el && summary) {
-      // Convert markdown-style bullets to HTML
-      const html = summary.split('\n')
-        .filter(l => l.trim())
-        .map(l => l.replace(/^[-•*]\s*/, ''))
-        .map(l => `<div>• ${escHtml(l)}</div>`)
-        .join('');
-      el.innerHTML = html;
+      el.innerHTML = renderSummaryHtml(summary);
       el.classList.remove('hidden');
     }
   }
@@ -693,12 +702,7 @@ function renderRepoModal(data) {
         }).then(r => r.ok ? r.json() : null).then(result => {
           const summary = result?.summaries?.[data.repo];
           if (summary && el) {
-            const html = summary.split('\n')
-              .filter(l => l.trim())
-              .map(l => l.replace(/^[-•*]\s*/, ''))
-              .map(l => `<div>• ${escHtml(l)}</div>`)
-              .join('');
-            el.innerHTML = html;
+            el.innerHTML = renderSummaryHtml(summary);
           } else if (el) {
             el.classList.add('hidden');
           }

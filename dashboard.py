@@ -522,9 +522,17 @@ def _build_summary_prompt(repo: str, commits: list[dict], merged_prs: list[dict]
         for c in commits:
             lines.append(f"  - {c.get('message', '?')} ({c.get('author', '?')})")
     lines.append(
-        "\nWrite 1-3 concise bullet points describing what was accomplished. "
+        "\nWrite a nested bullet list summarizing what was accomplished. "
+        "Use top-level bullets for major themes (e.g. 'API improvements', 'Bug fixes', 'Infrastructure'). "
+        "Use indented sub-bullets (with '  -') for specific changes under each theme. "
         "Group related commits together. Use plain language a project manager would understand. "
-        "Don't mention commit hashes or PR numbers. Keep it brief."
+        "Don't mention commit hashes or PR numbers. Keep it brief. "
+        "Example format:\n"
+        "- API improvements\n"
+        "  - Added retry logic to scoring endpoint\n"
+        "  - Fixed CORS headers for production\n"
+        "- Infrastructure\n"
+        "  - Updated dependencies"
     )
     return "\n".join(lines)
 
