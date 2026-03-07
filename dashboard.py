@@ -317,7 +317,7 @@ async def api_priorities():
 
 
 @app.get("/api/repo-status/{repo}")
-async def api_repo_status(repo: str):
+async def api_repo_status(repo: str, start: str = "", end: str = ""):
     issues = run_gh_json([
         "issue", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
         "--json", "number,title,labels,assignees,createdAt,updatedAt,milestone,url",
@@ -387,12 +387,14 @@ async def api_repo_status(repo: str):
         [b for b in branches if b.startswith("release") and b not in target_branches]
     )
 
-    thirty_days_ago = since_date(30)
+    commits_since = start if start else since_date(7)
+    commits_until = f"{end}T23:59:59Z" if end else ""
+    until_param = f"&until={commits_until}" if commits_until else ""
     branch_commits: dict[str, list] = {}
     for branch in target_branches:
         try:
             raw = run_gh([
-                "api", f"repos/sil-ai/{repo}/commits?sha={branch}&since={thirty_days_ago}T00:00:00Z&per_page=100",
+                "api", f"repos/sil-ai/{repo}/commits?sha={branch}&since={commits_since}T00:00:00Z{until_param}&per_page=100",
                 "-q", '.[] | {sha: .sha[:7], date: .commit.author.date, author: (.author.login // .commit.author.name), message: (.commit.message | split("\n")[0])}',
             ], timeout=10)
             if raw:

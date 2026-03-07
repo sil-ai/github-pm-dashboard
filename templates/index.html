@@ -93,14 +93,26 @@
     <span class="text-xs text-muted tabular-nums" id="timestamp"></span>
   </header>
 
-  <!-- Tabs -->
-  <nav class="bg-panel/60 backdrop-blur-sm border-b border-border px-6 py-0 flex gap-1 flex-wrap sticky top-[57px] z-20">
-    <button class="tab-btn active px-4 py-3 text-sm font-medium transition-colors" data-tab="weekly">Weekly Summary</button>
-    <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="overdue">Overdue</button>
-    <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="priorities">Priorities</button>
-    <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="pr-status">PR Status</button>
-    <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="repo-status">Repo Status</button>
-    <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="my-tasks">My Tasks</button>
+  <!-- Tabs + Date Range -->
+  <nav class="bg-panel/60 backdrop-blur-sm border-b border-border px-6 py-0 flex items-center justify-between sticky top-[57px] z-20">
+    <div class="flex gap-1 flex-wrap">
+      <button class="tab-btn active px-4 py-3 text-sm font-medium transition-colors" data-tab="summary">Summary</button>
+      <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="overdue">Overdue</button>
+      <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="priorities">Priorities</button>
+      <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="pr-status">PR Status</button>
+      <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="repo-status">Repo Status</button>
+      <button class="tab-btn px-4 py-3 text-sm font-medium transition-colors" data-tab="my-tasks">My Tasks</button>
+    </div>
+    <div class="flex items-center gap-2 text-sm py-2">
+      <button id="range-prev" class="text-muted hover:text-gray-200 transition-colors px-1.5">&larr;</button>
+      <span id="range-label" class="text-gray-400 tabular-nums text-xs min-w-[140px] text-center"></span>
+      <button id="range-next" class="text-muted hover:text-gray-200 transition-colors px-1.5">&rarr;</button>
+      <select id="range-period" class="bg-panel border border-border text-gray-300 rounded-md px-2 py-1 text-xs ml-1 cursor-pointer focus:outline-none focus:border-accent/50">
+        <option value="7">1 week</option>
+        <option value="14">2 weeks</option>
+        <option value="30">1 month</option>
+      </select>
+    </div>
   </nav>
 
   <!-- Modal -->

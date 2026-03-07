@@ -117,24 +117,34 @@ async function fetchCached(url, onData) {
 function showLoading() { loading.classList.remove('hidden'); content.innerHTML = ''; }
 function hideLoading() { loading.classList.add('hidden'); }
 
-// --- Weekly ---
+// --- Global date range ---
 
-let weeklyStart = null;
-let weeklyEnd = null;
+let rangeEnd = new Date();
+let rangeDays = 7;
+let rangeStart = new Date(rangeEnd.getTime() - rangeDays * 86400000);
 
-function weeklyDateStr(d) { return d.toISOString().slice(0, 10); }
+function dateStr(d) { return d.toISOString().slice(0, 10); }
 
-function renderWeekly(data) {
-  const isCurrentWeek = weeklyDateStr(weeklyEnd) === weeklyDateStr(new Date());
+function updateRangeLabel() {
+  const label = $('#range-label');
+  if (label) label.textContent = `${dateStr(rangeStart)} – ${dateStr(rangeEnd)}`;
+  const nextBtn = $('#range-next');
+  if (nextBtn) {
+    const isLatest = dateStr(rangeEnd) === dateStr(new Date());
+    nextBtn.classList.toggle('opacity-30', isLatest);
+    nextBtn.classList.toggle('cursor-not-allowed', isLatest);
+    nextBtn.disabled = isLatest;
+  }
+}
 
-  let html = `<div class="flex items-center gap-4 mb-6">
-    <button id="week-prev" class="bg-panel border border-border text-muted hover:text-gray-200 hover:border-accent px-3 py-1.5 rounded-lg text-sm transition-colors">&larr; Prev Week</button>
-    <div>
-      <h2 class="text-2xl font-bold">Weekly Summary</h2>
-      <p class="text-gray-500 text-sm">${data.start} to ${data.end}</p>
-    </div>
-    <button id="week-next" class="bg-panel border border-border text-muted hover:text-gray-200 hover:border-accent px-3 py-1.5 rounded-lg text-sm transition-colors ${isCurrentWeek ? 'opacity-30 cursor-not-allowed' : ''}" ${isCurrentWeek ? 'disabled' : ''}> Next Week &rarr;</button>
-  </div>`;
+function rangeParams() {
+  return `?start=${dateStr(rangeStart)}&end=${dateStr(rangeEnd)}`;
+}
+
+// --- Summary ---
+
+function renderSummary(data) {
+  let html = `<h2 class="text-2xl font-bold mb-6">Summary</h2>`;
 
   const commitRepos = Object.keys(data.commits_by_repo || {});
   if (commitRepos.length) {
@@ -170,7 +180,7 @@ function renderWeekly(data) {
   html += `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h3 class="text-lg font-semibold mb-3">PRs Merged (${data.prs_merged.length})</h3>`;
   if (data.prs_merged.length === 0) {
-    html += `<p class="text-gray-500">None this week</p>`;
+    html += `<p class="text-gray-500">None in this period</p>`;
   } else {
     const prsByRepo = groupBy(data.prs_merged, i => repoName(i.repository));
     for (const [repo, prs] of Object.entries(prsByRepo)) {
@@ -184,22 +194,6 @@ function renderWeekly(data) {
   html += `</div>`;
 
   content.innerHTML = html;
-
-  $('#week-prev').addEventListener('click', () => {
-    weeklyEnd = new Date(weeklyStart.getTime() - 1 * 86400000);
-    weeklyStart = new Date(weeklyEnd.getTime() - 7 * 86400000);
-    loadWeekly();
-  });
-  const nextBtn = $('#week-next');
-  if (!nextBtn.disabled) {
-    nextBtn.addEventListener('click', () => {
-      weeklyStart = new Date(weeklyEnd.getTime() + 1 * 86400000);
-      weeklyEnd = new Date(weeklyStart.getTime() + 7 * 86400000);
-      const today = new Date();
-      if (weeklyEnd > today) weeklyEnd = today;
-      loadWeekly();
-    });
-  }
 
   // Async-fetch AI summaries for each repo's commits
   fetchCommitSummaries(data);
@@ -297,18 +291,16 @@ function injectSummaries(summaries) {
   }
 }
 
-async function loadWeekly() {
-  if (!weeklyEnd) weeklyEnd = new Date();
-  if (!weeklyStart) weeklyStart = new Date(weeklyEnd.getTime() - 7 * 86400000);
-  const params = `?start=${weeklyDateStr(weeklyStart)}&end=${weeklyDateStr(weeklyEnd)}`;
-  await fetchCached('/api/weekly' + params, (data) => renderWeekly(data));
+async function loadSummary() {
+  updateRangeLabel();
+  await fetchCached('/api/weekly' + rangeParams(), (data) => renderSummary(data));
 }
 
 function renderIssueSection(title, issues, dateField) {
   let html = `<div class="bg-panel rounded-xl p-5 mb-6 border border-border">
     <h3 class="text-lg font-semibold mb-3">${title} (${issues.length})</h3>`;
   if (issues.length === 0) {
-    html += `<p class="text-gray-500">None this week</p>`;
+    html += `<p class="text-gray-500">None in this period</p>`;
   } else {
     const byRepo = groupBy(issues, i => repoName(i.repository));
     for (const [repo, items] of Object.entries(byRepo)) {
@@ -552,7 +544,7 @@ async function openRepoModal(repo) {
   const modal = $('#modal');
   const title = $('#modal-title');
   const body = $('#modal-body');
-  const url = `/api/repo-status/${repo}`;
+  const url = `/api/repo-status/${repo}${rangeParams()}`;
 
   title.innerHTML = repoLink(repo);
   modal.classList.remove('hidden');
@@ -799,7 +791,7 @@ function renderMyTasksData(user, data) {
 // --- Tab navigation ---
 
 const tabHandlers = {
-  'weekly': loadWeekly,
+  'summary': loadSummary,
   'overdue': loadOverdue,
   'priorities': loadPriorities,
   'pr-status': loadPrStatus,
@@ -829,11 +821,41 @@ $('#modal').addEventListener('click', (e) => { if (e.target === $('#modal')) clo
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
 window.addEventListener('popstate', () => {
-  const tab = location.hash.slice(1) || 'weekly';
+  const tab = location.hash.slice(1) || 'summary';
   if (tabHandlers[tab]) activateTab(tab);
 });
 
+// --- Date range controls ---
+$('#range-prev').addEventListener('click', () => {
+  rangeEnd = new Date(rangeStart.getTime() - 86400000);
+  rangeStart = new Date(rangeEnd.getTime() - rangeDays * 86400000);
+  onRangeChange();
+});
+$('#range-next').addEventListener('click', () => {
+  if ($('#range-next').disabled) return;
+  rangeStart = new Date(rangeEnd.getTime() + 86400000);
+  rangeEnd = new Date(rangeStart.getTime() + rangeDays * 86400000);
+  const today = new Date();
+  if (rangeEnd > today) rangeEnd = today;
+  onRangeChange();
+});
+$('#range-period').addEventListener('change', (e) => {
+  rangeDays = parseInt(e.target.value);
+  rangeEnd = new Date();
+  rangeStart = new Date(rangeEnd.getTime() - rangeDays * 86400000);
+  onRangeChange();
+});
+
+function onRangeChange() {
+  updateRangeLabel();
+  // Re-load the current tab to reflect the new date range
+  const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab || 'summary';
+  if (tabHandlers[activeTab]) tabHandlers[activeTab]();
+}
+
 // Init
 $('#timestamp').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-const initTab = location.hash.slice(1) || 'weekly';
-activateTab(tabHandlers[initTab] ? initTab : 'weekly');
+updateRangeLabel();
+const initTab = location.hash.slice(1) || 'summary';
+// Support old #weekly URLs
+activateTab(tabHandlers[initTab] ? initTab : 'summary');
