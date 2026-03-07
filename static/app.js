@@ -36,12 +36,15 @@ function repoName(r) {
 }
 
 let displayNames = {};
-function displayName(login) { return displayNames[login] || `@${login}`; }
+function displayName(login) {
+  const name = displayNames[login] || `@${login}`;
+  return `<span class="inline-block bg-white/8 text-gray-300 rounded-full px-2 py-0.5 text-xs font-medium">${name}</span>`;
+}
 fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
 
 function assigneeStr(assignees) {
   if (!assignees || !assignees.length) return '<span class="text-gray-500">unassigned</span>';
-  return assignees.map(a => displayName(a.login || a)).join(', ');
+  return assignees.map(a => displayName(a.login || a)).join(' ');
 }
 
 function priorityClass(labels) {
@@ -179,7 +182,7 @@ function renderSummary(data) {
       html += `<div id="${commitsId}" class="hidden">
         <ul class="ml-5 mt-1 text-sm text-gray-300 list-disc">`;
       const commitLink = (c) => `<a href="https://github.com/sil-ai/${repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs ml-1">${c.sha}</a>`;
-      const commitAuthor = (c) => `<span class="text-gray-500 text-xs ml-1">${escHtml(displayName(c.author))}</span>`;
+      const commitAuthor = (c) => `<span class="text-gray-500 text-xs ml-1">${displayName(c.author)}</span>`;
       for (const c of commits) {
         html += `<li>${escHtml(c.message)}${commitLink(c)}${commitAuthor(c)}</li>`;
       }
