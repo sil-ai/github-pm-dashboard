@@ -629,7 +629,7 @@ function renderRepoModal(data) {
       html += `<tr class="border-t border-border">
         <td class="py-1"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">#${pr.number} ${escHtml(pr.title)}</a>${pr.isDraft ? ' <span class="text-gray-500 bg-white/5 rounded px-1.5 py-0.5 text-xs">draft</span>' : ''}</td>
         <td class="py-1 text-gray-400 text-right">@${pr.author?.login || '?'}</td>
-        <td class="py-1 text-gray-500 text-right w-24">${daysAgo(pr.createdAt)}d</td>
+        <td class="py-1 text-gray-500 text-right w-24">${timeAgo(pr.createdAt)}</td>
       </tr>`;
     }
     html += `</tbody></table>`;
@@ -657,7 +657,7 @@ function renderRepoModal(data) {
       const prBadges = (i.linked_prs || []).map(p =>
         `<a href="${p.url}" target="_blank" class="inline-flex items-center gap-0.5 text-xs bg-green-900/40 text-green-400 rounded px-1.5 py-0.5 hover:bg-green-900/60" title="${escHtml(p.title)}">PR #${p.number}</a>`
       ).join(' ');
-      html += `<li><a href="${issueUrl(i)}" target="_blank" class="hover:text-accent">${escHtml(i.title)}</a> ${prBadges} <span class="text-gray-500">${assigneeStr(i.assignees)} - ${daysAgo(i.createdAt)}d old</span></li>`;
+      html += `<li><a href="${issueUrl(i)}" target="_blank" class="hover:text-accent">${escHtml(i.title)}</a> ${prBadges} <span class="text-gray-500">${assigneeStr(i.assignees)} - ${timeAgo(i.createdAt)}</span></li>`;
     }
     html += `</ul></div>`;
   }
@@ -780,7 +780,7 @@ function renderMyTasksData(user, data) {
       for (const i of issues) {
         html += `<li><a href="${issueUrl(i)}" target="_blank" class="hover:text-accent">${escHtml(i.title)}</a>
           ${priorityLabel(i.labels)}
-          <span class="text-gray-500">${daysAgo(i.createdAt)}d old</span></li>`;
+          <span class="text-gray-500">${timeAgo(i.createdAt)}</span></li>`;
       }
       html += `</ul></div>`;
     }
@@ -797,7 +797,7 @@ function renderMyTasksData(user, data) {
       html += `<div class="mb-2">${repoLink(repo)}<ul class="ml-5 text-sm list-disc">`;
       for (const pr of prs) {
         html += `<li><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">${escHtml(pr.title)}</a>
-          <span class="text-gray-500">${daysAgo(pr.createdAt)}d old</span></li>`;
+          <span class="text-gray-500">${timeAgo(pr.createdAt)}</span></li>`;
       }
       html += `</ul></div>`;
     }
