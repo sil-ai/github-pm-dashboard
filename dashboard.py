@@ -5,11 +5,13 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -478,9 +480,39 @@ async def api_my_tasks(username: str):
     return JSONResponse({"issues": issues, "prs": prs})
 
 
-# --- Commit summarization ---
+# --- Commit summarization (SQLite-backed cache) ---
 
-_summary_cache: dict[str, str] = {}
+_db_path = Path(__file__).parent / "cache.db"
+
+
+def _init_cache_db():
+    conn = sqlite3.connect(_db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS summaries "
+        "(hash TEXT PRIMARY KEY, summary TEXT, created_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+
+_init_cache_db()
+
+
+def _cache_get(key: str) -> str | None:
+    conn = sqlite3.connect(_db_path)
+    row = conn.execute("SELECT summary FROM summaries WHERE hash = ?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def _cache_set(key: str, summary: str):
+    conn = sqlite3.connect(_db_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO summaries (hash, summary, created_at) VALUES (?, ?, ?)",
+        (key, summary, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _call_openai(prompt: str) -> str:
@@ -559,13 +591,14 @@ async def api_summarize_commits(request: Request):
             sort_keys=True,
         ).encode()).hexdigest()[:16]
 
-        if cache_key in _summary_cache:
-            return repo, _summary_cache[cache_key]
+        cached = _cache_get(cache_key)
+        if cached:
+            return repo, cached
 
         prompt = _build_summary_prompt(repo, commits, merged_prs)
         summary = _call_openai(prompt)
         if summary:
-            _summary_cache[cache_key] = summary
+            _cache_set(cache_key, summary)
         return repo, summary
 
     with ThreadPoolExecutor(max_workers=4) as pool:
