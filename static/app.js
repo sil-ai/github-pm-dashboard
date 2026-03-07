@@ -39,12 +39,12 @@ let displayNames = {};
 const displayNamesReady = fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
 function displayName(login) {
   const name = displayNames[login] || `@${login}`;
-  return `<span class="inline-block bg-white/8 text-gray-300 rounded-full px-2 py-0.5 text-xs font-medium">${name}</span>`;
+  return `<span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style="background:rgba(255,255,255,0.08);color:#c5c7de">${name}</span>`;
 }
 
 function assigneeStr(assignees) {
   if (!assignees || !assignees.length) return '<span class="text-gray-500">unassigned</span>';
-  return assignees.map(a => displayName(a.login || a)).join(' ');
+  return assignees.map(a => displayName(a.login || a)).join('');
 }
 
 function priorityClass(labels) {
@@ -176,7 +176,7 @@ function renderSummary(data) {
       html += `<div class="mb-3">
         ${repoLink(repo)}
         <span class="text-gray-500 text-sm">(${commits.length} commits)</span>
-        <span class="text-gray-400 text-sm ml-2">${authors.join(', ')}</span>
+        <span class="text-sm ml-2">${authors.join(' ')}</span>
         <div id="${summaryId}" class="ml-1 mt-1 mb-1 text-sm text-gray-300 border-l-2 border-accent/30 pl-3 hidden"></div>`;
       const commitsId = `commits-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`;
       html += `<div id="${commitsId}" class="hidden">
