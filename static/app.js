@@ -99,12 +99,12 @@ async function fetchCached(url, onData) {
   const cached = cache[url];
   if (cached) {
     onData(cached.data, true);
-  } else {
-    showLoading();
   }
+  $('#refreshing').classList.remove('hidden');
   // Fetch from server (may return stale cached data with _stale flag)
   const data = await fetchJson(url);
   hideLoading();
+  $('#refreshing').classList.add('hidden');
   if (gen !== fetchGen) return;
   const isStale = data._stale;
   delete data._stale;
