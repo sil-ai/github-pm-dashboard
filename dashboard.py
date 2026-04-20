@@ -84,7 +84,7 @@ def since_date(days: int = 7) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 
 @app.get("/api/active-repos")
@@ -512,7 +512,8 @@ async def api_my_tasks(username: str):
 
 # --- Commit summarization (SQLite-backed cache) ---
 
-_db_path = Path(__file__).parent / "cache.db"
+_db_path = Path(__file__).parent / "data" / "cache.db"
+_db_path.parent.mkdir(exist_ok=True)
 
 
 def _init_cache_db():
