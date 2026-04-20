@@ -16,17 +16,47 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("dashboard")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+_SESSION_SECRET = os.getenv("SESSION_SECRET", "")
+_SESSION_COOKIE = "pm_session"
+
+
+def _session_token() -> str:
+    import hmac as _hmac
+    key = (_SESSION_SECRET or DASHBOARD_PASSWORD).encode()
+    return _hmac.new(key, DASHBOARD_PASSWORD.encode(), "sha256").hexdigest()
+
+
+def _valid_session(request: Request) -> bool:
+    if not DASHBOARD_PASSWORD:
+        return True
+    import hmac as _hmac
+    token = request.cookies.get(_SESSION_COOKIE, "")
+    return _hmac.compare_digest(token, _session_token())
+
+
+class _AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path in ("/login", "/logout") or path.startswith("/static"):
+            return await call_next(request)
+        if not _valid_session(request):
+            return RedirectResponse(url="/login", status_code=302)
+        return await call_next(request)
+
 
 app = FastAPI()
+app.add_middleware(_AuthMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -81,6 +111,68 @@ def since_date(days: int = 7) -> str:
 
 
 # --- Routes ---
+
+_LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login – sil-ai PM Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {{
+      darkMode: 'class',
+      theme: {{ extend: {{ colors: {{ surface: '#12131a', panel: '#1a1b26', border: '#2a2b3d', accent: '#818cf8' }},
+        fontFamily: {{ sans: ['"DM Sans"', 'system-ui', 'sans-serif'] }} }} }}
+    }}
+  </script>
+</head>
+<body class="dark bg-surface min-h-screen flex items-center justify-center font-sans">
+  <div class="bg-panel border border-border rounded-2xl p-8 w-full max-w-sm shadow-2xl shadow-black/40">
+    <h1 class="text-xl font-bold text-gray-100 mb-1">sil-ai <span class="text-[#818cf8]">PM Dashboard</span></h1>
+    <p class="text-sm text-gray-500 mb-6">Sign in to continue</p>
+    {error}
+    <form method="post" action="/login">
+      <label class="block text-sm text-gray-400 mb-1">Password</label>
+      <input type="password" name="password" autofocus
+        class="w-full bg-surface border border-border text-gray-200 rounded-lg px-4 py-2.5 mb-4 focus:outline-none focus:border-[#818cf8]/60 text-sm">
+      <button type="submit"
+        class="w-full bg-[#818cf8]/90 hover:bg-[#818cf8] text-white font-medium rounded-lg py-2.5 text-sm transition-colors">
+        Sign in
+      </button>
+    </form>
+  </div>
+</body>
+</html>
+"""
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(error: str = ""):
+    err_html = '<p class="text-red-400 text-sm mb-4">Incorrect password.</p>' if error else ""
+    return HTMLResponse(_LOGIN_HTML.format(error=err_html))
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    import hmac as _hmac
+    form = await request.form()
+    password = str(form.get("password", ""))
+    if DASHBOARD_PASSWORD and _hmac.compare_digest(password, DASHBOARD_PASSWORD):
+        response = RedirectResponse(url="/", status_code=302)
+        response.set_cookie(_SESSION_COOKIE, _session_token(), httponly=True, samesite="lax", max_age=86400 * 5)
+        return response
+    return RedirectResponse(url="/login?error=1", status_code=302)
+
+
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse(url="/login", status_code=302)
+    response.delete_cookie(_SESSION_COOKIE)
+    return response
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
