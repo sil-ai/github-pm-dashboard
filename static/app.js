@@ -107,10 +107,10 @@ async function fetchCached(url, onData) {
   if (cached) {
     onData(cached.data, true);
   }
-  $('#refreshing').classList.remove('hidden');
+  $('#refresh-btn').classList.add('refreshing');
   const data = await fetchJson(url);
   hideLoading();
-  $('#refreshing').classList.add('hidden');
+  $('#refresh-btn').classList.remove('refreshing');
   if (gen !== fetchGen) return;
   const isStale = data._stale;
   delete data._stale;
@@ -119,7 +119,7 @@ async function fetchCached(url, onData) {
     onData(data, false);
   }
   if (isStale) {
-    $('#refreshing').classList.remove('hidden');
+    $('#refresh-btn').classList.add('refreshing');
     try {
       const sep = url.includes('?') ? '&' : '?';
       const fresh = await fetchJson(url + sep + 'fresh=1');
@@ -129,7 +129,7 @@ async function fetchCached(url, onData) {
         onData(fresh, false);
       }
     } catch {}
-    $('#refreshing').classList.add('hidden');
+    $('#refresh-btn').classList.remove('refreshing');
   }
 }
 
@@ -418,52 +418,230 @@ function renderPriorityGroup(label, items, cls) {
 
 // --- PR Status ---
 
+let prGroupMode = 'repo';
+
+function classifyPrStatus(pr) {
+  if (pr.isDraft) return 'Draft';
+  const reviews = pr.reviews || [];
+  const hasApproval = reviews.some(r => r.state === 'APPROVED');
+  const hasChangesRequested = reviews.some(r => r.state === 'CHANGES_REQUESTED');
+  const pendingReviewers = pr.requested_reviewers || [];
+  if (hasChangesRequested) return 'Changes Requested';
+  if (hasApproval && pendingReviewers.length === 0) return 'Ready to Merge';
+  if (hasApproval && pendingReviewers.length > 0) return 'Approved (Awaiting Others)';
+  if (pendingReviewers.length > 0) return 'Awaiting Review';
+  if (reviews.length === 0) return 'No Reviewers';
+  return 'In Review';
+}
+
+const statusOrder = ['Ready to Merge', 'Approved (Awaiting Others)', 'Changes Requested', 'Awaiting Review', 'In Review', 'No Reviewers', 'Draft'];
+const statusColors = {
+  'Ready to Merge': 'text-green-400',
+  'Approved (Awaiting Others)': 'text-green-300',
+  'Changes Requested': 'text-red-400',
+  'Awaiting Review': 'text-yellow-400',
+  'In Review': 'text-blue-400',
+  'No Reviewers': 'text-gray-500',
+  'Draft': 'text-gray-500',
+};
+const statusIcons = {
+  'Ready to Merge': '\u2714',
+  'Approved (Awaiting Others)': '\u25d0',
+  'Changes Requested': '\u2716',
+  'Awaiting Review': '\u25f7',
+  'In Review': '\u25cb',
+  'No Reviewers': '\u2014',
+  'Draft': '\u270e',
+};
+
+function renderPrRow(pr) {
+  const age = daysAgo(pr.createdAt);
+  const ageColor = age > 14 ? 'text-red-400' : age > 7 ? 'text-yellow-400' : 'text-gray-500';
+  const draft = pr.isDraft ? '<span class="text-gray-500 bg-white/5 rounded px-1.5 py-0.5 text-xs ml-1">draft</span>' : '';
+
+  const reviewBadges = (pr.reviews || []).map(r => {
+    const colors = { 'APPROVED': 'text-green-400', 'CHANGES_REQUESTED': 'text-red-400', 'COMMENTED': 'text-blue-400', 'DISMISSED': 'text-gray-500' };
+    const icons = { 'APPROVED': 'ok', 'CHANGES_REQUESTED': 'chg', 'COMMENTED': 'cmt', 'DISMISSED': 'dis' };
+    const cls = colors[r.state] || 'text-gray-400';
+    const icon = icons[r.state] || r.state;
+    return `<span class="${cls} text-xs" title="${r.state}">${displayName(r.user)} <span class="opacity-60">${icon}</span></span>`;
+  }).join(' ');
+
+  const waiting = (pr.requested_reviewers || []).map(u =>
+    `<span class="text-yellow-400 text-xs" title="awaiting review">@${u} <span class="opacity-60">pending</span></span>`
+  ).join(' ');
+
+  const reviewCol = [reviewBadges, waiting].filter(Boolean).join(' ') || '<span class="text-gray-600 text-xs">no reviewers</span>';
+
+  return `<tr class="border-t border-border">
+    <td class="py-1.5"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">${escHtml(pr.title)}</a>${draft}</td>
+    <td class="py-1.5 text-gray-400 text-right w-28">${displayName(pr.author?.login || '?')}</td>
+    <td class="py-1.5 text-right">${reviewCol}</td>
+    <td class="py-1.5 ${ageColor} text-right w-16">${age}d</td>
+  </tr>`;
+}
+
+function renderPrToggle() {
+  return `<div class="inline-flex rounded-lg border border-border overflow-hidden mb-6 ml-4">
+    <button class="pr-group-btn px-3 py-1 text-sm ${prGroupMode === 'repo' ? 'bg-accent/20 text-accent' : 'text-gray-400 hover:text-white'}" data-mode="repo">By Repo</button>
+    <button class="pr-group-btn px-3 py-1 text-sm ${prGroupMode === 'status' ? 'bg-accent/20 text-accent' : 'text-gray-400 hover:text-white'}" data-mode="status">By Status</button>
+  </div>`;
+}
+
+function renderPrsByRepo(prs) {
+  const byRepo = groupBy(prs, i => repoName(i.repository));
+  const sortedRepos = Object.entries(byRepo).sort((a, b) => b[1].length - a[1].length);
+  let html = '';
+  for (const [repo, repoPrs] of sortedRepos) {
+    html += `<div class="bg-panel rounded-xl p-5 mb-4 border border-border">
+      <h3 class="text-lg font-semibold mb-3">${repoLink(repo)} <span class="text-gray-500 text-sm">(${repoPrs.length})</span></h3>
+      <table class="w-full text-sm"><tbody>`;
+    for (const pr of repoPrs) html += renderPrRow(pr);
+    html += `</tbody></table></div>`;
+  }
+  return html;
+}
+
+function renderPrsByStatus(prs) {
+  const byStatus = groupBy(prs, classifyPrStatus);
+  let html = '';
+  for (const status of statusOrder) {
+    const statusPrs = byStatus[status];
+    if (!statusPrs || statusPrs.length === 0) continue;
+    const color = statusColors[status] || 'text-gray-400';
+    const icon = statusIcons[status] || '';
+    html += `<div class="bg-panel rounded-xl p-5 mb-4 border border-border">
+      <h3 class="text-lg font-semibold mb-3"><span class="${color}">${icon}</span> ${status} <span class="text-gray-500 text-sm">(${statusPrs.length})</span></h3>
+      <table class="w-full text-sm"><tbody>`;
+    for (const pr of statusPrs) {
+      const reviewBadges = (pr.reviews || []).map(r => {
+        const colors = { 'APPROVED': 'text-green-400', 'CHANGES_REQUESTED': 'text-red-400', 'COMMENTED': 'text-blue-400', 'DISMISSED': 'text-gray-500' };
+        const icons = { 'APPROVED': 'ok', 'CHANGES_REQUESTED': 'chg', 'COMMENTED': 'cmt', 'DISMISSED': 'dis' };
+        return `<span class="${colors[r.state] || 'text-gray-400'} text-xs" title="${r.state}">${displayName(r.user)} <span class="opacity-60">${icons[r.state] || r.state}</span></span>`;
+      }).join(' ');
+      const waiting = (pr.requested_reviewers || []).map(u =>
+        `<span class="text-yellow-400 text-xs" title="awaiting review">@${u} <span class="opacity-60">pending</span></span>`
+      ).join(' ');
+      const reviewCol = [reviewBadges, waiting].filter(Boolean).join(' ') || '<span class="text-gray-600 text-xs">no reviewers</span>';
+      html += `<tr class="border-t border-border">
+        <td class="py-1.5"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">${escHtml(pr.title)}</a>${pr.isDraft ? '<span class="text-gray-500 bg-white/5 rounded px-1.5 py-0.5 text-xs ml-1">draft</span>' : ''}</td>
+        <td class="py-1.5 text-gray-400 w-36">${repoLink(repoName(pr.repository))}</td>
+        <td class="py-1.5 text-gray-400 text-right w-28">${displayName(pr.author?.login || '?')}</td>
+        <td class="py-1.5 text-right">${reviewCol}</td>
+        <td class="py-1.5 ${daysAgo(pr.createdAt) > 14 ? 'text-red-400' : daysAgo(pr.createdAt) > 7 ? 'text-yellow-400' : 'text-gray-500'} text-right w-16">${daysAgo(pr.createdAt)}d</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+  return html;
+}
+
 async function loadPrStatus() {
   await fetchCached('/api/pr-status', (data) => {
     const prs = data.prs;
-    let html = `<h2 class="text-2xl font-bold mb-6">Open PRs Across Org (${prs.length})</h2>`;
+    let html = `<div class="flex items-center mb-2"><h2 class="text-2xl font-bold">Open PRs Across Org (${prs.length})</h2>`;
 
     if (prs.length === 0) {
-      html += `<p class="text-gray-500">No open PRs</p>`;
+      html += `</div><p class="text-gray-500">No open PRs</p>`;
       content.innerHTML = html;
       return;
     }
 
-    const byRepo = groupBy(prs, i => repoName(i.repository));
-    const sortedRepos = Object.entries(byRepo).sort((a, b) => b[1].length - a[1].length);
+    html += renderPrToggle() + `</div>`;
+    html += prGroupMode === 'status' ? renderPrsByStatus(prs) : renderPrsByRepo(prs);
+    content.innerHTML = html;
 
-    for (const [repo, repoPrs] of sortedRepos) {
-      html += `<div class="bg-panel rounded-xl p-5 mb-4 border border-border">
-        <h3 class="text-lg font-semibold mb-3">${repoLink(repo)} <span class="text-gray-500 text-sm">(${repoPrs.length})</span></h3>
+    for (const btn of content.querySelectorAll('.pr-group-btn')) {
+      btn.addEventListener('click', () => {
+        prGroupMode = btn.dataset.mode;
+        loadPrStatus();
+      });
+    }
+  });
+}
+
+// --- Actions ---
+
+const actionIcons = {
+  'success': '&#x2714;',   // checkmark
+  'failure': '&#x2716;',   // X
+  'cancelled': '&#x2014;', // dash
+  'skipped': '&#x2014;',
+  'in_progress': '&#x25f7;', // clock
+  'queued': '&#x25cb;',      // circle
+};
+
+function actionStatusClass(conclusion, status) {
+  if (status === 'in_progress' || status === 'queued') return 'action-pending';
+  if (conclusion === 'success') return 'action-success';
+  if (conclusion === 'failure') return 'action-failure';
+  if (conclusion === 'cancelled' || conclusion === 'skipped') return 'action-cancelled';
+  return 'action-pending';
+}
+
+function actionStatusLabel(conclusion, status) {
+  if (status === 'in_progress') return 'running';
+  if (status === 'queued') return 'queued';
+  return conclusion || status;
+}
+
+async function loadActions() {
+  await fetchCached('/api/actions', (data) => {
+    // Flatten all runs, sort by most recent first
+    const allRuns = [];
+    for (const repo of data) {
+      for (const run of repo.runs) {
+        allRuns.push({ ...run, repo: repo.repo });
+      }
+    }
+    allRuns.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+
+    // Count statuses
+    const failCount = allRuns.filter(r => r.conclusion === 'failure').length;
+    const passCount = allRuns.filter(r => r.conclusion === 'success').length;
+
+    let html = `<div class="flex items-center gap-4 mb-6">
+      <h2 class="text-2xl font-bold">GitHub Actions</h2>
+      <span class="text-sm text-gray-400">${allRuns.length} recent runs across ${data.length} repos</span>
+      ${passCount ? `<span class="action-success text-sm font-medium">${passCount} passed</span>` : ''}
+      ${failCount ? `<span class="action-failure text-sm font-medium">${failCount} failed</span>` : ''}
+    </div>`;
+
+    if (allRuns.length === 0) {
+      html += `<p class="text-gray-500">No recent workflow runs found</p>`;
+      content.innerHTML = html;
+      return;
+    }
+
+    // Group by repo
+    const byRepo = groupBy(allRuns, r => r.repo);
+    // Sort repos by most recent run
+    const sortedRepos = Object.entries(byRepo).sort((a, b) =>
+      (b[1][0]?.created_at || '').localeCompare(a[1][0]?.created_at || '')
+    );
+
+    for (const [repo, runs] of sortedRepos) {
+      const hasFailure = runs.some(r => r.conclusion === 'failure');
+      const border = hasFailure ? 'border-red-500/40' : 'border-border';
+      html += `<div class="bg-panel rounded-xl p-5 mb-4 border ${border}">
+        <h3 class="text-lg font-semibold mb-3">${repoLink(repo)}</h3>
         <table class="w-full text-sm"><tbody>`;
-      for (const pr of repoPrs) {
-        const age = daysAgo(pr.createdAt);
-        const ageColor = age > 14 ? 'text-red-400' : age > 7 ? 'text-yellow-400' : 'text-gray-500';
-        const draft = pr.isDraft ? '<span class="text-gray-500 bg-white/5 rounded px-1.5 py-0.5 text-xs ml-1">draft</span>' : '';
-
-        const reviewBadges = (pr.reviews || []).map(r => {
-          const colors = { 'APPROVED': 'text-green-400', 'CHANGES_REQUESTED': 'text-red-400', 'COMMENTED': 'text-blue-400', 'DISMISSED': 'text-gray-500' };
-          const icons = { 'APPROVED': 'ok', 'CHANGES_REQUESTED': 'chg', 'COMMENTED': 'cmt', 'DISMISSED': 'dis' };
-          const cls = colors[r.state] || 'text-gray-400';
-          const icon = icons[r.state] || r.state;
-          return `<span class="${cls} text-xs" title="${r.state}">${displayName(r.user)} <span class="opacity-60">${icon}</span></span>`;
-        }).join(' ');
-
-        const waiting = (pr.requested_reviewers || []).map(u =>
-          `<span class="text-yellow-400 text-xs" title="awaiting review">@${u} <span class="opacity-60">pending</span></span>`
-        ).join(' ');
-
-        const reviewCol = [reviewBadges, waiting].filter(Boolean).join(' ') || '<span class="text-gray-600 text-xs">no reviewers</span>';
-
+      for (const run of runs) {
+        const cls = actionStatusClass(run.conclusion, run.status);
+        const icon = actionIcons[run.conclusion] || actionIcons[run.status] || '&#x25cb;';
+        const label = actionStatusLabel(run.conclusion, run.status);
         html += `<tr class="border-t border-border">
-          <td class="py-1.5"><a href="${issueUrl(pr)}" target="_blank" class="hover:text-accent">${escHtml(pr.title)}</a>${draft}</td>
-          <td class="py-1.5 text-gray-400 text-right w-28">${displayName(pr.author?.login || '?')}</td>
-          <td class="py-1.5 text-right">${reviewCol}</td>
-          <td class="py-1.5 ${ageColor} text-right w-16">${age}d</td>
+          <td class="py-1.5 w-8"><span class="${cls} text-base" title="${label}">${icon}</span></td>
+          <td class="py-1.5"><a href="${run.html_url}" target="_blank" class="hover:text-accent">${escHtml(run.name)}</a>
+            <span class="text-gray-500 text-xs ml-1">#${run.run_number}</span></td>
+          <td class="py-1.5 text-gray-400 text-sm w-28">${escHtml(run.head_branch || '')}</td>
+          <td class="py-1.5 text-right w-20"><span class="${cls} text-xs font-medium">${label}</span></td>
+          <td class="py-1.5 text-gray-500 text-right w-20 text-xs">${timeAgo(run.created_at)}</td>
         </tr>`;
       }
       html += `</tbody></table></div>`;
     }
+
     content.innerHTML = html;
   });
 }
@@ -582,7 +760,7 @@ async function openRepoModal(repo) {
     renderRepoModal(data);
   }
   if (isStale) {
-    $('#refreshing').classList.remove('hidden');
+    $('#refresh-btn').classList.add('refreshing');
     try {
       const sep = url.includes('?') ? '&' : '?';
       const fresh = await fetchJson(url + sep + 'fresh=1');
@@ -592,7 +770,7 @@ async function openRepoModal(repo) {
         renderRepoModal(fresh);
       }
     } catch {}
-    $('#refreshing').classList.add('hidden');
+    $('#refresh-btn').classList.remove('refreshing');
   }
 }
 
@@ -821,6 +999,7 @@ const tabHandlers = {
   'overdue': loadOverdue,
   'priorities': loadPriorities,
   'pr-status': loadPrStatus,
+  'actions': loadActions,
   'repo-status': loadRepoStatus,
   'my-tasks': loadMyTasks,
 };
@@ -902,6 +1081,14 @@ function onRangeChange() {
   const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab || 'summary';
   if (tabHandlers[activeTab]) tabHandlers[activeTab]();
 }
+
+// Refresh button — clears cache for current tab's URLs and reloads
+$('#refresh-btn').addEventListener('click', () => {
+  // Clear all cached data so fetchCached will do a full fetch
+  for (const key of Object.keys(cache)) delete cache[key];
+  const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab || 'summary';
+  if (tabHandlers[activeTab]) tabHandlers[activeTab]();
+});
 
 // Init
 $('#timestamp').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });

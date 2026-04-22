@@ -583,6 +583,33 @@ async def api_pr_status():
     return JSONResponse({"prs": list(prs)})
 
 
+@app.get("/api/actions")
+async def api_actions():
+    repos = get_active_repos()
+    log.info("Fetching actions for %d repos in parallel...", len(repos))
+
+    def fetch_runs(repo):
+        try:
+            runs = run_gh_json([
+                "api", f"repos/sil-ai/{repo}/actions/runs?per_page=5",
+                "--jq", "[.workflow_runs[] | {id, name, head_branch, status, conclusion, created_at, updated_at, html_url, run_number, event}]",
+            ], timeout=15)
+            if runs:
+                return {"repo": repo, "runs": runs}
+        except Exception as e:
+            log.warning("  %s actions: failed (%s)", repo, e)
+        return None
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = await asyncio.gather(
+            *[loop.run_in_executor(pool, fetch_runs, repo) for repo in repos]
+        )
+    # Only include repos that have workflow runs
+    data = [r for r in results if r and r["runs"]]
+    return JSONResponse(data)
+
+
 @app.get("/api/my-tasks/{username}")
 async def api_my_tasks(username: str):
     issues = run_gh_json([
