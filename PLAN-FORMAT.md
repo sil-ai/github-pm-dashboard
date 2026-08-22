@@ -68,6 +68,11 @@ Rules:
   beside a Step nobody has started. If the PR that does the reverting does not
   exist yet, omit `ref` and add it later.
 - Keep Step text short enough to read in a row — detail goes in the prose.
+- **Ticking normalises the Step line it touches** to the canonical spacing above:
+  one space after `- [x]`, one before the comment, no trailing whitespace. A
+  line already written canonically round-trips byte-for-byte; a non-canonical
+  one is tidied toward this spec the first time someone ticks it. No other line
+  is touched.
 
 ## Kinds
 
