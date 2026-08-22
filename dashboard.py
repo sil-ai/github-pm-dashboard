@@ -26,6 +26,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("dashboard")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GH_WRITE_TOKEN = os.getenv("GH_WRITE_TOKEN", "")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
 _SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 _SESSION_COOKIE = "pm_session"
@@ -61,12 +62,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 
-def run_gh(args: list[str], timeout: int = 60) -> str:
+def run_gh(args: list[str], timeout: int = 60, stdin: str | None = None, token: str = "") -> str:
     result = subprocess.run(
         ["gh", *args],
         capture_output=True,
         text=True,
         timeout=timeout,
+        input=stdin,
+        env={**os.environ, "GH_TOKEN": token} if token else None,
     )
     if result.returncode != 0:
         raise RuntimeError(f"gh command failed: {result.stderr}")
@@ -679,6 +682,13 @@ def _api_cache_set(url: str, data: dict):
     conn.close()
 
 
+def _api_cache_clear(url: str):
+    conn = sqlite3.connect(_db_path)
+    conn.execute("DELETE FROM api_cache WHERE url = ?", (url,))
+    conn.commit()
+    conn.close()
+
+
 def _cache_get(key: str) -> str | None:
     conn = sqlite3.connect(_db_path)
     row = conn.execute("SELECT summary FROM summaries WHERE hash = ?", (key,)).fetchone()
@@ -793,3 +803,252 @@ async def api_summarize_commits(request: Request):
                 results[repo] = summary
 
     return JSONResponse({"summaries": results})
+
+
+# --- Plans (ordered cross-repo checklists, stored as `plan`-labelled issues) ---
+
+PLAN_LABEL = "plan"
+PLAN_COMPLETED_DAYS = 14
+_PLANS_CACHE_URL = "/api/plans/list"
+_STEP_RE = re.compile(r"^(\s*)- \[([ xX])\] ?(.*)$")
+_META_RE = re.compile(r"<!--(.*?)-->")
+
+
+def _parse_meta(comment: str) -> dict:
+    meta = {}
+    for token in comment.split():
+        key, sep, value = token.partition(":")
+        if sep and key:
+            meta[key] = value
+    return meta
+
+
+def _fmt_meta(meta: dict) -> str:
+    return " ".join(f"{k}:{meta[k]}" for k in ("repo", "ref", "kind", "by", "at") if meta.get(k))
+
+
+def parse_plan_body(body: str) -> tuple[list[dict], str]:
+    """Split an issue body into ordered Steps and the surrounding context prose.
+
+    Flat list only: indented checklist items are treated as Steps at the same
+    level, so nesting cannot make "next up" ambiguous.
+    """
+    steps, context = [], []
+    for lineno, line in enumerate(body.splitlines()):
+        m = _STEP_RE.match(line)
+        if not m:
+            context.append(line)
+            continue
+        comment = _META_RE.search(m.group(3))
+        meta = _parse_meta(comment.group(1)) if comment else {}
+        ref = meta.get("ref", "")
+        steps.append({
+            "index": len(steps),
+            "line": lineno,
+            "raw": line,
+            "text": _META_RE.sub("", m.group(3)).strip(),
+            "done": m.group(2).lower() == "x",
+            "repo": meta.get("repo", ""),
+            "ref": int(ref) if ref.isdigit() else 0,
+            "kind": meta.get("kind", ""),
+            "by": meta.get("by", ""),
+            "at": meta.get("at", ""),
+        })
+    return steps, re.sub(r"\n{3,}", "\n\n", "\n".join(context).strip())
+
+
+def fetch_step_state(repo: str, ref: int) -> dict:
+    """Live state of the PR or issue a Step references. Never inferred as Done."""
+    try:
+        pr = run_gh_json([
+            "pr", "view", str(ref), "--repo", f"sil-ai/{repo}",
+            "--json", "state,isDraft,mergedAt,mergeable,reviewDecision,title,url",
+        ], timeout=10)
+        if pr["state"] == "MERGED":
+            state = "merged"
+        elif pr["state"] == "CLOSED":
+            state = "closed_unmerged"
+        elif pr["isDraft"]:
+            state = "draft"
+        else:
+            state = "open"
+        return {
+            "type": "pr",
+            "state": state,
+            "mergedAt": pr.get("mergedAt"),
+            "mergeable": pr.get("mergeable"),
+            "reviewDecision": pr.get("reviewDecision"),
+            "title": pr.get("title"),
+            "url": pr.get("url"),
+        }
+    except Exception:
+        pass
+    try:
+        issue = run_gh_json([
+            "issue", "view", str(ref), "--repo", f"sil-ai/{repo}",
+            "--json", "state,title,url",
+        ], timeout=10)
+        return {
+            "type": "issue",
+            "state": issue["state"].lower(),
+            "title": issue.get("title"),
+            "url": issue.get("url"),
+        }
+    except Exception as e:
+        log.warning("  %s#%s: ref unresolvable (%s)", repo, ref, e)
+        return {"type": "unknown", "state": "not_found"}
+
+
+def search_plans() -> list[dict]:
+    fields = "repository,number,title,url,state,createdAt,updatedAt"
+    open_plans = run_gh_json([
+        "search", "issues", "--owner", "sil-ai", "--label", PLAN_LABEL,
+        "--state", "open", "--json", fields, "--limit", "50",
+    ], timeout=20)
+    closed_plans = run_gh_json([
+        "search", "issues", "--owner", "sil-ai", "--label", PLAN_LABEL,
+        "--state", "closed", "--json", fields, "--limit", "50",
+        "--", f"closed:>{since_date(PLAN_COMPLETED_DAYS)}",
+    ], timeout=20)
+    return [*open_plans, *closed_plans]
+
+
+def fetch_plan(listed: dict) -> dict | None:
+    repo = listed["repository"]["name"]
+    number = listed["number"]
+    try:
+        issue = run_gh_json([
+            "issue", "view", str(number), "--repo", f"sil-ai/{repo}",
+            "--json", "number,title,url,body,state,closedAt,updatedAt",
+        ], timeout=15)
+    except Exception as e:
+        log.warning("  %s#%s: plan body fetch failed (%s)", repo, number, e)
+        return None
+    steps, context = parse_plan_body(issue.get("body") or "")
+    return {
+        "repo": repo,
+        "number": number,
+        "title": issue["title"],
+        "url": issue["url"],
+        "state": issue["state"].lower(),
+        "closedAt": issue.get("closedAt"),
+        "updatedAt": issue.get("updatedAt"),
+        "context": context,
+        "steps": steps,
+        "repos": sorted({s["repo"] for s in steps if s["repo"]}),
+        "doneCount": sum(1 for s in steps if s["done"]),
+        "total": len(steps),
+        "nextUp": next((s["index"] for s in steps if not s["done"]), None),
+    }
+
+
+@app.get("/api/plans")
+async def api_plans(fresh: str = ""):
+    cached, list_stale = (None, False) if fresh else _api_cache_get(_PLANS_CACHE_URL)
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        if cached:
+            listed = cached["plans"]
+        else:
+            listed = await loop.run_in_executor(pool, search_plans)
+            _api_cache_set(_PLANS_CACHE_URL, {"plans": listed})
+            list_stale = False
+
+        # Bodies are never cached: a stale checklist can get a migration run twice.
+        log.info("Fetching %d plan bodies in parallel...", len(listed))
+        plans = await asyncio.gather(
+            *[loop.run_in_executor(pool, fetch_plan, p) for p in listed]
+        )
+        plans = [p for p in plans if p]
+
+        refs = [(p, s) for p in plans for s in p["steps"] if s["repo"] and s["ref"]]
+        states = await asyncio.gather(
+            *[loop.run_in_executor(pool, fetch_step_state, s["repo"], s["ref"]) for _, s in refs]
+        )
+
+    for (_, step), state in zip(refs, states):
+        step["live"] = state
+
+    plans.sort(key=lambda p: p["updatedAt"] or "", reverse=True)
+    result = {"plans": plans, "canWrite": bool(GH_WRITE_TOKEN)}
+    if list_stale:
+        result["_stale"] = True
+    return JSONResponse(result)
+
+
+def _write_step(repo: str, number: int, index: int, done: bool, by: str, expect: str) -> tuple[int, dict]:
+    """Re-read the body, verify the target line, then rewrite it. Refuses to clobber."""
+    issue = run_gh_json([
+        "issue", "view", str(number), "--repo", f"sil-ai/{repo}", "--json", "body",
+    ], timeout=15)
+    body = issue.get("body") or ""
+    lines = body.splitlines()
+    steps, _ = parse_plan_body(body)
+
+    if index >= len(steps):
+        return 409, {"error": "That step no longer exists — the plan changed. Refresh."}
+    step = steps[index]
+    if expect and step["raw"] != expect:
+        return 409, {"error": "That step changed since you loaded the plan. Refresh and try again."}
+
+    m = _STEP_RE.match(step["raw"])
+    comment = _META_RE.search(m.group(3))
+    meta = _parse_meta(comment.group(1)) if comment else {}
+    if done:
+        meta["by"] = by
+        meta["at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        meta.pop("by", None)
+        meta.pop("at", None)
+
+    rendered = _fmt_meta(meta)
+    text = _META_RE.sub("", m.group(3)).strip()
+    line = f"{m.group(1)}- [{'x' if done else ' '}] {text}"
+    if rendered:
+        line += f" <!-- {rendered} -->"
+    lines[step["line"]] = line
+
+    run_gh(
+        ["issue", "edit", str(number), "--repo", f"sil-ai/{repo}", "--body-file", "-"],
+        timeout=20, stdin="\n".join(lines) + "\n", token=GH_WRITE_TOKEN,
+    )
+    return 200, {"raw": line, "by": meta.get("by", ""), "at": meta.get("at", "")}
+
+
+@app.post("/api/plans/{repo}/{number}/steps/{index}")
+async def api_plan_step(repo: str, number: int, index: int, request: Request):
+    if not GH_WRITE_TOKEN:
+        return JSONResponse(
+            {"error": "Ticking needs GH_WRITE_TOKEN (fine-grained, Issues: Read+Write)."},
+            status_code=503,
+        )
+    payload = await request.json()
+    by = (payload.get("by") or "").strip()
+    if not by:
+        return JSONResponse({"error": "Pick who you are before ticking."}, status_code=400)
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        status, result = await loop.run_in_executor(
+            pool, _write_step, repo, number, index,
+            bool(payload.get("done")), by, payload.get("expect") or "",
+        )
+    return JSONResponse(result, status_code=status)
+
+
+@app.post("/api/plans/{repo}/{number}/close")
+async def api_plan_close(repo: str, number: int):
+    if not GH_WRITE_TOKEN:
+        return JSONResponse(
+            {"error": "Closing needs GH_WRITE_TOKEN (fine-grained, Issues: Read+Write)."},
+            status_code=503,
+        )
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        await loop.run_in_executor(pool, lambda: run_gh(
+            ["issue", "close", str(number), "--repo", f"sil-ai/{repo}"],
+            timeout=20, token=GH_WRITE_TOKEN,
+        ))
+    _api_cache_clear(_PLANS_CACHE_URL)
+    return JSONResponse({"closed": True})

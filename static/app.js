@@ -992,10 +992,284 @@ function renderMyTasksData(user, data) {
   el.innerHTML = html;
 }
 
+// --- Plans ---
+
+const planOpen = new Set();
+let planOpenInit = false;
+let plansData = { plans: [], canWrite: false };
+
+function planKey(p) { return `${p.repo}#${p.number}`; }
+function planUser() { return localStorage.getItem('plans-user') || ''; }
+
+const kindStyles = {
+  merge: 'bg-indigo-500/15 text-indigo-300',
+  migrate: 'bg-amber-500/15 text-amber-300',
+  deploy: 'bg-sky-500/15 text-sky-300',
+  verify: 'bg-emerald-500/15 text-emerald-300',
+  manual: 'bg-white/[0.07] text-gray-400',
+};
+
+function kindBadge(kind) {
+  if (!kind) return '';
+  return `<span class="rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wider ${kindStyles[kind] || kindStyles.manual}">${escHtml(kind)}</span>`;
+}
+
+// Live state is what GitHub reports. It is never treated as Done.
+function liveState(step) {
+  const live = step.live;
+  if (!live) return null;
+  if (live.state === 'not_found')
+    return { cls: 'text-red-400', text: `⚠ ref not found — check ${escHtml(step.repo)}#${step.ref}` };
+  if (live.state === 'closed_unmerged')
+    return { cls: 'text-red-400', text: '⚠ closed unmerged — code did not land' };
+  if (live.state === 'merged')
+    return { cls: 'text-emerald-400', text: `merged ${timeAgo(live.mergedAt)}` };
+  if (live.state === 'draft')
+    return { cls: 'text-gray-500', text: 'draft' };
+  if (live.type === 'issue')
+    return { cls: 'text-gray-500', text: `issue ${escHtml(live.state)}` };
+  const review = {
+    APPROVED: { cls: 'text-emerald-400', text: 'open · approved' },
+    CHANGES_REQUESTED: { cls: 'text-amber-400', text: 'open · changes requested' },
+    REVIEW_REQUIRED: { cls: 'text-gray-500', text: 'open · awaiting review' },
+  }[live.reviewDecision];
+  return review || { cls: 'text-gray-500', text: 'open' };
+}
+
+function renderStep(plan, step) {
+  const outOfOrder = step.done && plan.nextUp !== null && step.index > plan.nextUp;
+  const isNext = !step.done && step.index === plan.nextUp;
+  const live = liveState(step);
+
+  const box = step.done
+    ? `<span class="text-accent text-[13px] leading-none">&#10003;</span>`
+    : '';
+  const boxCls = step.done
+    ? 'border-accent/70 bg-accent/15'
+    : isNext ? 'border-accent/60' : 'border-border hover:border-muted';
+
+  let meta = '';
+  if (step.repo && step.ref) {
+    meta = `<a href="https://github.com/sil-ai/${encodeURIComponent(step.repo)}/issues/${step.ref}" target="_blank"
+      class="font-mono text-[11px] text-accent hover:text-white">${escHtml(step.repo)}#${step.ref}</a>`;
+  } else if (step.repo) {
+    meta = `<span class="font-mono text-[11px] text-muted">${escHtml(step.repo)}</span>`;
+  }
+
+  return `<div class="flex items-start gap-2.5 py-1">
+    <button data-tick="1" data-repo="${escHtml(plan.repo)}" data-number="${plan.number}"
+      data-index="${step.index}" data-done="${step.done}" data-raw="${escHtml(step.raw)}"
+      title="${step.done ? 'Mark not done' : 'Mark done'}"
+      class="mt-[3px] w-4 h-4 shrink-0 rounded border ${boxCls} flex items-center justify-center transition-colors">${box}</button>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-baseline gap-2 flex-wrap">
+        <span class="text-muted tabular-nums text-[11px] w-4 shrink-0">${step.index + 1}</span>
+        <span class="text-sm ${step.done ? 'text-gray-500 line-through decoration-gray-600' : 'text-gray-200'}">${escHtml(step.text)}</span>
+        ${meta}
+        ${kindBadge(step.kind)}
+        ${isNext ? '<span class="text-[10px] font-semibold uppercase tracking-wider text-accent">next up</span>' : ''}
+        ${outOfOrder ? '<span class="text-[10px] font-semibold uppercase tracking-wider text-amber-400" title="Ticked before an earlier step">out of order</span>' : ''}
+      </div>
+      <div class="ml-6 flex items-baseline gap-3 text-[11px]">
+        ${live ? `<span class="${live.cls}">${live.text}</span>` : ''}
+        ${step.done && step.by ? `<span class="text-muted">${displayName(step.by)} · ${timeAgo(step.at)}</span>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderPlan(plan) {
+  const open = planOpen.has(planKey(plan));
+  const complete = plan.total > 0 && plan.doneCount === plan.total;
+  const pct = plan.total ? Math.round((plan.doneCount / plan.total) * 100) : 0;
+
+  let html = `<div class="bg-panel border border-border rounded-xl mb-3 overflow-hidden">
+    <button data-plan-toggle="${escHtml(planKey(plan))}"
+      class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors">
+      <span class="text-muted text-xs w-3 shrink-0">${open ? '&#9662;' : '&#9656;'}</span>
+      <span class="font-semibold text-gray-100 text-sm">${escHtml(plan.title)}</span>
+      <span class="flex gap-1 flex-wrap">${plan.repos.map(r =>
+        `<span class="rounded bg-white/[0.06] px-1.5 py-px text-[10px] font-mono text-gray-400">${escHtml(r)}</span>`).join('')}</span>
+      <span class="ml-auto flex items-center gap-2.5 shrink-0">
+        ${plan.state === 'open' ? `<span class="w-16 h-1 rounded-full bg-white/10 overflow-hidden">
+          <span class="block h-full bg-accent" style="width:${pct}%"></span></span>` : ''}
+        <span class="text-xs tabular-nums ${complete ? 'text-emerald-400' : 'text-muted'}">${plan.doneCount}/${plan.total}</span>
+        ${plan.state !== 'open' ? `<span class="text-[11px] text-muted">closed ${timeAgo(plan.closedAt)}</span>` : ''}
+      </span>
+    </button>`;
+
+  if (open) {
+    html += `<div class="px-4 pb-4 border-t border-border/60 pt-3">`;
+    if (plan.context) {
+      html += `<details class="mb-3 group">
+        <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 list-none">
+          &#9656; Context</summary>
+        <div class="mt-2 text-xs text-gray-400 whitespace-pre-wrap border-l-2 border-border pl-3">${escHtml(plan.context)}</div>
+      </details>`;
+    }
+    if (!plan.total) {
+      html += `<p class="text-sm text-gray-500">No steps in this plan — the issue has no checklist.</p>`;
+    } else {
+      html += plan.steps.map(s => renderStep(plan, s)).join('');
+    }
+    html += `<div class="flex items-center gap-3 mt-3 pt-3 border-t border-border/60">
+      <a href="${plan.url}" target="_blank" class="text-[11px] text-muted hover:text-accent">open issue &#8599;</a>
+      ${complete && plan.state === 'open' ? `<button data-plan-close="1" data-repo="${escHtml(plan.repo)}" data-number="${plan.number}"
+        class="ml-auto text-[11px] bg-accent/90 text-white px-3 py-1.5 rounded-lg hover:bg-accent transition-colors">All steps done — close plan</button>` : ''}
+    </div></div>`;
+  }
+  return html + `</div>`;
+}
+
+function renderPlans(data) {
+  plansData = data;
+  const plans = data.plans || [];
+  const active = plans.filter(p => p.state === 'open');
+  const done = plans.filter(p => p.state !== 'open');
+
+  if (!planOpenInit) {
+    active.forEach(p => planOpen.add(planKey(p)));
+    planOpenInit = true;
+  }
+
+  const user = planUser();
+  let html = `<div class="flex items-center justify-between gap-4 mb-5 flex-wrap">
+    <h2 class="text-2xl font-bold">Plans</h2>
+    <div class="flex items-center gap-2 text-sm">
+      <span class="text-muted text-xs">You are</span>
+      <select id="plans-user" class="bg-panel border border-border text-gray-200 rounded-lg px-3 py-1.5 text-xs">
+        <option value="">Select yourself…</option>
+        ${orgMembers.map(m => `<option value="${m}" ${m === user ? 'selected' : ''}>${m}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div id="plans-error" class="hidden mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-300"></div>`;
+
+  if (!data.canWrite) {
+    html += `<div class="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-4 py-2.5 text-xs text-amber-300">
+      Read-only: <span class="font-mono">GH_WRITE_TOKEN</span> is not configured on this server, so steps cannot be ticked here.
+    </div>`;
+  }
+
+  if (!plans.length) {
+    html += `<div class="bg-panel border border-border rounded-xl p-8 text-center">
+      <p class="text-gray-400 mb-1">No plans yet.</p>
+      <p class="text-sm text-gray-500">Create one from any repo with
+        <span class="font-mono text-accent">/github-pm plan</span>, or open an issue there
+        labelled <span class="font-mono text-accent">plan</span> with a checklist.</p>
+    </div>`;
+    content.innerHTML = html;
+    return;
+  }
+
+  html += `<h3 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">In progress (${active.length})</h3>`;
+  html += active.length ? active.map(renderPlan).join('')
+    : `<p class="text-sm text-gray-500 mb-4">Nothing in progress.</p>`;
+
+  if (done.length) {
+    html += `<details class="mt-6">
+      <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 mb-2 list-none">
+        &#9656; Completed · last 14 days (${done.length})</summary>
+      <div class="mt-2">${done.map(renderPlan).join('')}</div>
+    </details>`;
+  }
+
+  content.innerHTML = html;
+}
+
+function planError(msg) {
+  const el = $('#plans-error');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+async function tickStep(btn) {
+  const user = planUser();
+  if (!user) return planError('Pick who you are before ticking a step.');
+
+  const { repo, number, index, raw } = btn.dataset;
+  const done = btn.dataset.done !== 'true';
+  $('#plans-error')?.classList.add('hidden');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/plans/${encodeURIComponent(repo)}/${number}/steps/${index}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ done, by: user, expect: raw }),
+    });
+    const out = await res.json();
+    if (!res.ok) {
+      planError(out.error || `Could not save (HTTP ${res.status})`);
+      if (res.status === 409) await loadPlans();
+      return;
+    }
+    const plan = plansData.plans.find(p => p.repo === repo && String(p.number) === number);
+    const step = plan.steps[Number(index)];
+    Object.assign(step, { done, raw: out.raw, by: out.by, at: out.at });
+    plan.doneCount = plan.steps.filter(s => s.done).length;
+    plan.nextUp = plan.steps.findIndex(s => !s.done);
+    if (plan.nextUp === -1) plan.nextUp = null;
+    cache['/api/plans'] = { data: plansData, time: Date.now() };
+    renderPlans(plansData);
+  } catch (e) {
+    planError(`Could not save: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function closePlan(btn) {
+  const { repo, number } = btn.dataset;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/plans/${encodeURIComponent(repo)}/${number}/close`, { method: 'POST' });
+    if (!res.ok) {
+      const out = await res.json().catch(() => ({}));
+      planError(out.error || `Could not close (HTTP ${res.status})`);
+      return;
+    }
+    delete cache['/api/plans'];
+    await loadPlans();
+  } catch (e) {
+    planError(`Could not close: ${e.message}`);
+  }
+}
+
+async function loadPlans() {
+  if (!orgMembers.length) orgMembers = await fetchJson('/api/org-members');
+  await displayNamesReady;
+  if (!cache['/api/plans']) showLoading();
+  await fetchCached('/api/plans', renderPlans);
+}
+
+content.addEventListener('click', (e) => {
+  const toggle = e.target.closest('[data-plan-toggle]');
+  if (toggle) {
+    const key = toggle.dataset.planToggle;
+    planOpen.has(key) ? planOpen.delete(key) : planOpen.add(key);
+    renderPlans(plansData);
+    return;
+  }
+  const tick = e.target.closest('[data-tick]');
+  if (tick) return tickStep(tick);
+  const close = e.target.closest('[data-plan-close]');
+  if (close) return closePlan(close);
+});
+
+content.addEventListener('change', (e) => {
+  if (e.target.id === 'plans-user') {
+    localStorage.setItem('plans-user', e.target.value);
+    $('#plans-error')?.classList.add('hidden');
+  }
+});
+
 // --- Tab navigation ---
 
 const tabHandlers = {
   'summary': loadSummary,
+  'plans': loadPlans,
   'overdue': loadOverdue,
   'priorities': loadPriorities,
   'pr-status': loadPrStatus,
@@ -1008,6 +1282,7 @@ function activateTab(tab) {
   $$('.tab-btn').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
   if (btn) btn.classList.add('active');
+  $('#range-controls').classList.toggle('hidden', tab === 'plans');
   tabHandlers[tab]();
 }
 

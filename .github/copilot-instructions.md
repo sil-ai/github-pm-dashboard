@@ -85,6 +85,17 @@ New routes must match the established conventions — flag deviations:
 - **Active repos:** repo-wide endpoints derive their repo set from
   `get_active_repos()` (non-archived, updated within 90 days) rather than
   re-listing repos with bespoke filters.
+- **Writes:** only the Plans endpoints write to GitHub, and they must go through
+  `run_gh(..., token=GH_WRITE_TOKEN)` so writes use the least-privilege
+  credential rather than the ambient read token. A write route returns 503 when
+  `GH_WRITE_TOKEN` is unset, mirroring `api_summarize_commits` with no
+  `OPENAI_API_KEY`. Body-rewriting writes (ticking a Step) must re-read the
+  issue and verify the target line before `gh issue edit`, returning 409 rather
+  than clobbering a concurrent edit — see
+  `docs/adr/0001-plans-stored-as-github-issues.md`.
+- **Plan state:** never infer a Step's `done` from GitHub. A merged PR is
+  reported as live state next to an unticked Step; only a person's tick sets
+  `done`. See `docs/adr/0002-done-is-asserted-not-observed.md`.
 - **Dates:** format and age dates with the existing helpers (`days_ago`,
   `fmt_date`, `since_date`) instead of re-deriving the arithmetic.
 
@@ -127,6 +138,9 @@ Review for maintainable, well-structured code:
 - The Tailwind-via-CDN setup, the inline `_LOGIN_HTML` template, and generated/
   runtime artifacts under `data/` (e.g. `cache.db`) and gitignored files
   (`.env`, `display_names.json`).
+- The Plans tab hiding `#range-controls`, and the Plan list being cached while
+  Plan bodies are not — both are deliberate (a stale checklist can get a
+  migration run twice).
 
 Keep findings focused and actionable. Prioritize correctness, security
 (no shell injection via `gh`, intact auth), and consistency over stylistic
