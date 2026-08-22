@@ -38,7 +38,8 @@ function repoName(r) {
 let displayNames = {};
 const displayNamesReady = fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
 function displayName(login) {
-  const name = escHtml(displayNames[login] || `@${login}`);
+  const custom = Object.hasOwn(displayNames, login) ? `${displayNames[login]}` : '';
+  const name = escHtml(custom || `@${login}`);
   return `<span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style="background:rgba(255,255,255,0.08);color:#c5c7de">${name}</span>`;
 }
 
@@ -88,7 +89,7 @@ function repoLink(name) {
 
 function escHtml(s) {
   if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 async function fetchJson(url) {
@@ -1011,7 +1012,8 @@ const kindStyles = {
 
 function kindBadge(kind) {
   if (!kind) return '';
-  return `<span class="rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wider ${kindStyles[kind] || kindStyles.manual}">${escHtml(kind)}</span>`;
+  const style = Object.hasOwn(kindStyles, kind) ? kindStyles[kind] : kindStyles.manual;
+  return `<span class="rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wider ${style}">${escHtml(kind)}</span>`;
 }
 
 // Live state is what GitHub reports. It is never treated as Done.

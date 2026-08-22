@@ -1016,7 +1016,6 @@ def _write_step(repo: str, number: int, index: int, done: bool, by: str, expect:
         return 404, {"error": f"sil-ai/{repo}#{number} is not a Plan."}
 
     body = issue.get("body") or ""
-    lines = body.splitlines()
     steps, _ = parse_plan_body(body)
 
     if index < 0 or index >= len(steps):
@@ -1040,12 +1039,12 @@ def _write_step(repo: str, number: int, index: int, done: bool, by: str, expect:
     line = f"{m.group(1)}{m.group(2)} [{'x' if done else ' '}] {text}"
     if rendered:
         line += f" <!-- {rendered} -->"
-    lines[step["line"]] = line
-
-    # Preserve the body's own line endings and trailing newline, so ticking one
-    # step never shows up as a whole-document diff.
-    nl = "\r\n" if "\r\n" in body else "\n"
-    new_body = nl.join(lines) + (nl if body.endswith(("\n", "\r")) else "")
+    # Rewrite in place, keeping this line's own terminator, so every other byte
+    # of the body — including mixed or non-LF line endings — is untouched.
+    kept = body.splitlines(keepends=True)
+    original = kept[step["line"]]
+    kept[step["line"]] = line + original[len(original.rstrip("\r\n")):]
+    new_body = "".join(kept)
 
     run_gh(
         ["issue", "edit", str(number), "--repo", f"sil-ai/{repo}", "--body-file", "-"],
