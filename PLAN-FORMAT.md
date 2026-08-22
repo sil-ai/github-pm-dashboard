@@ -49,8 +49,8 @@ pre-migration snapshot.
 | `repo` | no | Repo the Step happens in, without the `sil-ai/` prefix. Omit for Steps that touch no repo. |
 | `ref`  | no | The PR or issue **whose completion is this Step**, as a bare number in `repo`. Not any PR the Step merely mentions. Omit it when the PR does not exist yet. `repo` must be set too. |
 | `kind` | yes | One of `merge`, `migrate`, `deploy`, `verify`, `manual`. |
-| `by`   | never | Written by the dashboard on tick. Do not author it. |
-| `at`   | never | Written by the dashboard on tick. Do not author it. |
+| `by`   | never at authoring | Set only when a Step is ticked, to the GitHub login of the person asserting it. Written by the dashboard, or by an agent acting on that person's explicit instruction. |
+| `at`   | never at authoring | Set alongside `by`. UTC, `%Y-%m-%dT%H:%M:%SZ`. |
 
 Rules:
 
