@@ -38,7 +38,7 @@ function repoName(r) {
 let displayNames = {};
 const displayNamesReady = fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
 function displayName(login) {
-  const name = displayNames[login] || `@${login}`;
+  const name = escHtml(displayNames[login] || `@${login}`);
   return `<span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style="background:rgba(255,255,255,0.08);color:#c5c7de">${name}</span>`;
 }
 
@@ -1005,7 +1005,7 @@ const kindStyles = {
   merge: 'bg-indigo-500/15 text-indigo-300',
   migrate: 'bg-amber-500/15 text-amber-300',
   deploy: 'bg-sky-500/15 text-sky-300',
-  verify: 'bg-emerald-500/15 text-emerald-300',
+  verify: 'bg-violet-500/15 text-violet-300',
   manual: 'bg-white/[0.07] text-gray-400',
 };
 
@@ -1016,37 +1016,42 @@ function kindBadge(kind) {
 
 // Live state is what GitHub reports. It is never treated as Done.
 function liveState(step) {
+  if (step.badRef)
+    return { warn: true, text: `⚠ invalid ref "${escHtml(step.badRef)}" — must be a number` };
   const live = step.live;
   if (!live) return null;
   if (live.state === 'not_found')
-    return { cls: 'text-red-400', text: `⚠ ref not found — check ${escHtml(step.repo)}#${step.ref}` };
+    return { warn: true, text: `⚠ ref not found — check ${escHtml(step.repo)}#${step.ref}` };
   if (live.state === 'closed_unmerged')
-    return { cls: 'text-red-400', text: '⚠ closed unmerged — code did not land' };
+    return { warn: true, text: '⚠ closed unmerged — code did not land' };
   if (live.state === 'merged')
-    return { cls: 'text-emerald-400', text: `merged ${timeAgo(live.mergedAt)}` };
+    return { cls: 'text-accent', text: `merged ${timeAgo(live.mergedAt)}${step.done ? '' : ' — not yet confirmed'}` };
   if (live.state === 'draft')
     return { cls: 'text-gray-500', text: 'draft' };
   if (live.type === 'issue')
     return { cls: 'text-gray-500', text: `issue ${escHtml(live.state)}` };
   const review = {
-    APPROVED: { cls: 'text-emerald-400', text: 'open · approved' },
+    APPROVED: { cls: 'text-sky-400', text: 'open · approved' },
     CHANGES_REQUESTED: { cls: 'text-amber-400', text: 'open · changes requested' },
     REVIEW_REQUIRED: { cls: 'text-gray-500', text: 'open · awaiting review' },
   }[live.reviewDecision];
   return review || { cls: 'text-gray-500', text: 'open' };
 }
 
-function renderStep(plan, step) {
+function renderStep(plan, step, canWrite) {
   const outOfOrder = step.done && plan.nextUp !== null && step.index > plan.nextUp;
   const isNext = !step.done && step.index === plan.nextUp;
   const live = liveState(step);
 
+  // A merged PR on an unticked Step gets its own mark, so the checkbox itself
+  // says "GitHub says yes, nobody has confirmed" — not just the text beside it.
+  const observed = !step.done && step.live && step.live.state === 'merged';
   const box = step.done
-    ? `<span class="text-accent text-[13px] leading-none">&#10003;</span>`
-    : '';
+    ? `<span class="text-emerald-400 text-[13px] leading-none">&#10003;</span>`
+    : observed ? `<span class="w-1.5 h-1.5 rounded-full bg-accent/70"></span>` : '';
   const boxCls = step.done
-    ? 'border-accent/70 bg-accent/15'
-    : isNext ? 'border-accent/60' : 'border-border hover:border-muted';
+    ? 'border-emerald-400/70 bg-emerald-400/15'
+    : isNext ? 'border-accent/60' : 'border-border';
 
   let meta = '';
   if (step.repo && step.ref) {
@@ -1059,35 +1064,44 @@ function renderStep(plan, step) {
   return `<div class="flex items-start gap-2.5 py-1">
     <button data-tick="1" data-repo="${escHtml(plan.repo)}" data-number="${plan.number}"
       data-index="${step.index}" data-done="${step.done}" data-raw="${escHtml(step.raw)}"
-      title="${step.done ? 'Mark not done' : 'Mark done'}"
-      class="mt-[3px] w-4 h-4 shrink-0 rounded border ${boxCls} flex items-center justify-center transition-colors">${box}</button>
+      role="checkbox" aria-checked="${step.done}"
+      aria-label="Mark step ${step.index + 1} ${step.done ? 'not done' : 'done'}"
+      ${canWrite ? '' : 'disabled title="Read-only — GH_WRITE_TOKEN is not configured"'}
+      class="-ml-1.5 mt-px w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition-colors
+        ${canWrite ? 'hover:bg-white/5' : 'opacity-40 cursor-not-allowed'}
+        focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none">
+      <span class="w-4 h-4 rounded border ${boxCls} flex items-center justify-center transition-colors">${box}</span>
+    </button>
     <div class="min-w-0 flex-1">
       <div class="flex items-baseline gap-2 flex-wrap">
         <span class="text-muted tabular-nums text-[11px] w-4 shrink-0">${step.index + 1}</span>
         <span class="text-sm ${step.done ? 'text-gray-500 line-through decoration-gray-600' : 'text-gray-200'}">${escHtml(step.text)}</span>
         ${meta}
         ${kindBadge(step.kind)}
-        ${isNext ? '<span class="text-[10px] font-semibold uppercase tracking-wider text-accent">next up</span>' : ''}
+        ${isNext ? '<span class="rounded bg-accent/20 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">next up</span>' : ''}
         ${outOfOrder ? '<span class="text-[10px] font-semibold uppercase tracking-wider text-amber-400" title="Ticked before an earlier step">out of order</span>' : ''}
       </div>
       <div class="ml-6 flex items-baseline gap-3 text-[11px]">
-        ${live ? `<span class="${live.cls}">${live.text}</span>` : ''}
+        ${live ? `<span class="${live.warn
+          ? 'rounded border border-red-500/40 bg-red-500/15 px-1.5 py-px font-medium text-red-300'
+          : live.cls}">${live.text}</span>` : ''}
         ${step.done && step.by ? `<span class="text-muted">${displayName(step.by)} · ${timeAgo(step.at)}</span>` : ''}
       </div>
     </div>
   </div>`;
 }
 
-function renderPlan(plan) {
+function renderPlan(plan, canWrite) {
   const open = planOpen.has(planKey(plan));
   const complete = plan.total > 0 && plan.doneCount === plan.total;
   const pct = plan.total ? Math.round((plan.doneCount / plan.total) * 100) : 0;
 
   let html = `<div class="bg-panel border border-border rounded-xl mb-3 overflow-hidden">
     <button data-plan-toggle="${escHtml(planKey(plan))}"
-      class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors">
+      class="w-full flex flex-wrap items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors
+        focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none">
       <span class="text-muted text-xs w-3 shrink-0">${open ? '&#9662;' : '&#9656;'}</span>
-      <span class="font-semibold text-gray-100 text-sm">${escHtml(plan.title)}</span>
+      <span class="font-semibold text-gray-100 text-sm min-w-0 flex-1 truncate" title="${escHtml(plan.title)}">${escHtml(plan.title)}</span>
       <span class="flex gap-1 flex-wrap">${plan.repos.map(r =>
         `<span class="rounded bg-white/[0.06] px-1.5 py-px text-[10px] font-mono text-gray-400">${escHtml(r)}</span>`).join('')}</span>
       <span class="ml-auto flex items-center gap-2.5 shrink-0">
@@ -1110,12 +1124,14 @@ function renderPlan(plan) {
     if (!plan.total) {
       html += `<p class="text-sm text-gray-500">No steps in this plan — the issue has no checklist.</p>`;
     } else {
-      html += plan.steps.map(s => renderStep(plan, s)).join('');
+      html += plan.steps.map(s => renderStep(plan, s, canWrite)).join('');
     }
     html += `<div class="flex items-center gap-3 mt-3 pt-3 border-t border-border/60">
       <a href="${plan.url}" target="_blank" class="text-[11px] text-muted hover:text-accent">open issue &#8599;</a>
       ${complete && plan.state === 'open' ? `<button data-plan-close="1" data-repo="${escHtml(plan.repo)}" data-number="${plan.number}"
-        class="ml-auto text-[11px] bg-accent/90 text-white px-3 py-1.5 rounded-lg hover:bg-accent transition-colors">All steps done — close plan</button>` : ''}
+        ${canWrite ? '' : 'disabled title="Read-only — GH_WRITE_TOKEN is not configured"'}
+        class="ml-auto text-[11px] bg-accent/90 text-white px-3 py-1.5 rounded-lg transition-colors
+          ${canWrite ? 'hover:bg-accent' : 'opacity-40 cursor-not-allowed'}">All steps done — close plan</button>` : ''}
     </div></div>`;
   }
   return html + `</div>`;
@@ -1163,30 +1179,34 @@ function renderPlans(data) {
   }
 
   html += `<h3 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">In progress (${active.length})</h3>`;
-  html += active.length ? active.map(renderPlan).join('')
+  html += active.length ? active.map(p => renderPlan(p, data.canWrite)).join('')
     : `<p class="text-sm text-gray-500 mb-4">Nothing in progress.</p>`;
 
   if (done.length) {
     html += `<details class="mt-6">
       <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 mb-2 list-none">
         &#9656; Completed · last 14 days (${done.length})</summary>
-      <div class="mt-2">${done.map(renderPlan).join('')}</div>
+      <div class="mt-2">${done.map(p => renderPlan(p, data.canWrite)).join('')}</div>
     </details>`;
   }
 
   content.innerHTML = html;
 }
 
-function planError(msg) {
+function planError(msg, focusUser) {
   const el = $('#plans-error');
   if (!el) return;
   el.textContent = msg;
   el.classList.remove('hidden');
+  // The banner sits above the plan list; the step just clicked may be screens
+  // below it, so bring it to the user rather than announcing off-screen.
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (focusUser) $('#plans-user')?.focus();
 }
 
 async function tickStep(btn) {
   const user = planUser();
-  if (!user) return planError('Pick who you are before ticking a step.');
+  if (!user) return planError('Pick who you are before ticking a step.', true);
 
   const { repo, number, index, raw } = btn.dataset;
   const done = btn.dataset.done !== 'true';
@@ -1197,12 +1217,14 @@ async function tickStep(btn) {
     const res = await fetch(`/api/plans/${encodeURIComponent(repo)}/${number}/steps/${index}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ done, by: user, expect: raw }),
+      body: JSON.stringify({ done, by: user, expect: raw || '' }),
     });
     const out = await res.json();
     if (!res.ok) {
-      planError(out.error || `Could not save (HTTP ${res.status})`);
+      // Reload first: renderPlans() rebuilds #plans-error as hidden, so setting
+      // the message before the reload would erase it in the same tick.
       if (res.status === 409) await loadPlans();
+      planError(out.error || `Could not save (HTTP ${res.status})`);
       return;
     }
     const plan = plansData.plans.find(p => p.repo === repo && String(p.number) === number);

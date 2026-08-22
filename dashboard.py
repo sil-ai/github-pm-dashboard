@@ -16,6 +16,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -810,8 +811,27 @@ async def api_summarize_commits(request: Request):
 PLAN_LABEL = "plan"
 PLAN_COMPLETED_DAYS = 14
 _PLANS_CACHE_URL = "/api/plans/list"
-_STEP_RE = re.compile(r"^(\s*)- \[([ xX])\] ?(.*)$")
-_META_RE = re.compile(r"<!--(.*?)-->")
+# Bullet is captured so a rewrite preserves whatever the author used.
+_STEP_RE = re.compile(r"^(\s*)([-*+]) \[([ xX])\] ?(.*)$")
+# Anchored, and angle brackets excluded, so a literal <!-- in a Step's own text
+# cannot shadow the real trailing metadata.
+_META_RE = re.compile(r"<!--([^<>]*)-->\s*$")
+_ACTOR_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+
+# One lock per Plan issue, so a read-verify-write cycle cannot interleave with
+# another. Sufficient because the app runs a single uvicorn worker; a second
+# worker would need a shared lock.
+_plan_locks: dict[tuple[str, int], asyncio.Lock] = {}
+
+
+def _plan_lock(repo: str, number: int) -> asyncio.Lock:
+    return _plan_locks.setdefault((repo, number), asyncio.Lock())
+
+
+class StepTick(BaseModel):
+    done: bool
+    by: str
+    expect: str
 
 
 def _parse_meta(comment: str) -> dict:
@@ -839,16 +859,17 @@ def parse_plan_body(body: str) -> tuple[list[dict], str]:
         if not m:
             context.append(line)
             continue
-        comment = _META_RE.search(m.group(3))
+        comment = _META_RE.search(m.group(4))
         meta = _parse_meta(comment.group(1)) if comment else {}
         ref = meta.get("ref", "")
         steps.append({
             "index": len(steps),
             "line": lineno,
             "raw": line,
-            "text": _META_RE.sub("", m.group(3)).strip(),
-            "done": m.group(2).lower() == "x",
-            "repo": meta.get("repo", ""),
+            "text": _META_RE.sub("", m.group(4)).strip(),
+            "done": m.group(3).lower() == "x",
+            "badRef": "" if not ref or ref.isdigit() else ref,
+            "repo": meta.get("repo", "") if "/" not in meta.get("repo", "") else "",
             "ref": int(ref) if ref.isdigit() else 0,
             "kind": meta.get("kind", ""),
             "by": meta.get("by", ""),
@@ -951,9 +972,17 @@ async def api_plans(fresh: str = ""):
         if cached:
             listed = cached["plans"]
         else:
-            listed = await loop.run_in_executor(pool, search_plans)
-            _api_cache_set(_PLANS_CACHE_URL, {"plans": listed})
-            list_stale = False
+            try:
+                listed = await loop.run_in_executor(pool, search_plans)
+                _api_cache_set(_PLANS_CACHE_URL, {"plans": listed})
+                list_stale = False
+            except Exception as e:
+                # The search API budget is 30/min and `fresh=1` lets anyone spend
+                # it. Serve the last known list rather than failing the tab.
+                log.warning("plan search failed (%s); falling back to cache", e)
+                stale, _ = _api_cache_get(_PLANS_CACHE_URL)
+                listed = stale["plans"] if stale else []
+                list_stale = True
 
         # Bodies are never cached: a stale checklist can get a migration run twice.
         log.info("Fetching %d plan bodies in parallel...", len(listed))
@@ -980,20 +1009,24 @@ async def api_plans(fresh: str = ""):
 def _write_step(repo: str, number: int, index: int, done: bool, by: str, expect: str) -> tuple[int, dict]:
     """Re-read the body, verify the target line, then rewrite it. Refuses to clobber."""
     issue = run_gh_json([
-        "issue", "view", str(number), "--repo", f"sil-ai/{repo}", "--json", "body",
+        "issue", "view", str(number), "--repo", f"sil-ai/{repo}",
+        "--json", "body,labels",
     ], timeout=15)
+    if PLAN_LABEL not in [l["name"] for l in issue.get("labels", [])]:
+        return 404, {"error": f"sil-ai/{repo}#{number} is not a Plan."}
+
     body = issue.get("body") or ""
     lines = body.splitlines()
     steps, _ = parse_plan_body(body)
 
-    if index >= len(steps):
+    if index < 0 or index >= len(steps):
         return 409, {"error": "That step no longer exists — the plan changed. Refresh."}
     step = steps[index]
-    if expect and step["raw"] != expect:
+    if step["raw"] != expect:
         return 409, {"error": "That step changed since you loaded the plan. Refresh and try again."}
 
     m = _STEP_RE.match(step["raw"])
-    comment = _META_RE.search(m.group(3))
+    comment = _META_RE.search(m.group(4))
     meta = _parse_meta(comment.group(1)) if comment else {}
     if done:
         meta["by"] = by
@@ -1003,37 +1036,44 @@ def _write_step(repo: str, number: int, index: int, done: bool, by: str, expect:
         meta.pop("at", None)
 
     rendered = _fmt_meta(meta)
-    text = _META_RE.sub("", m.group(3)).strip()
-    line = f"{m.group(1)}- [{'x' if done else ' '}] {text}"
+    text = _META_RE.sub("", m.group(4)).strip()
+    line = f"{m.group(1)}{m.group(2)} [{'x' if done else ' '}] {text}"
     if rendered:
         line += f" <!-- {rendered} -->"
     lines[step["line"]] = line
 
+    # Preserve the body's own line endings and trailing newline, so ticking one
+    # step never shows up as a whole-document diff.
+    nl = "\r\n" if "\r\n" in body else "\n"
+    new_body = nl.join(lines) + (nl if body.endswith(("\n", "\r")) else "")
+
     run_gh(
         ["issue", "edit", str(number), "--repo", f"sil-ai/{repo}", "--body-file", "-"],
-        timeout=20, stdin="\n".join(lines) + "\n", token=GH_WRITE_TOKEN,
+        timeout=20, stdin=new_body, token=GH_WRITE_TOKEN,
     )
     return 200, {"raw": line, "by": meta.get("by", ""), "at": meta.get("at", "")}
 
 
 @app.post("/api/plans/{repo}/{number}/steps/{index}")
-async def api_plan_step(repo: str, number: int, index: int, request: Request):
+async def api_plan_step(repo: str, number: int, index: int, tick: StepTick):
     if not GH_WRITE_TOKEN:
         return JSONResponse(
             {"error": "Ticking needs GH_WRITE_TOKEN (fine-grained, Issues: Read+Write)."},
             status_code=503,
         )
-    payload = await request.json()
-    by = (payload.get("by") or "").strip()
-    if not by:
-        return JSONResponse({"error": "Pick who you are before ticking."}, status_code=400)
+    by = tick.by.strip()
+    if not _ACTOR_RE.match(by):
+        return JSONResponse({"error": "Not a valid GitHub username."}, status_code=400)
 
     loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        status, result = await loop.run_in_executor(
-            pool, _write_step, repo, number, index,
-            bool(payload.get("done")), by, payload.get("expect") or "",
-        )
+    async with _plan_lock(repo, number):
+        try:
+            status, result = await loop.run_in_executor(
+                None, _write_step, repo, number, index, tick.done, by, tick.expect,
+            )
+        except Exception as e:
+            log.warning("tick %s#%s step %s failed: %s", repo, number, index, e)
+            return JSONResponse({"error": "GitHub write failed. Try again."}, status_code=502)
     return JSONResponse(result, status_code=status)
 
 
@@ -1045,10 +1085,32 @@ async def api_plan_close(repo: str, number: int):
             status_code=503,
         )
     loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        await loop.run_in_executor(pool, lambda: run_gh(
-            ["issue", "close", str(number), "--repo", f"sil-ai/{repo}"],
-            timeout=20, token=GH_WRITE_TOKEN,
-        ))
-    _api_cache_clear(_PLANS_CACHE_URL)
-    return JSONResponse({"closed": True})
+    async with _plan_lock(repo, number):
+        try:
+            status, result = await loop.run_in_executor(None, _close_plan, repo, number)
+        except Exception as e:
+            log.warning("close %s#%s failed: %s", repo, number, e)
+            return JSONResponse({"error": "GitHub write failed. Try again."}, status_code=502)
+    if status == 200:
+        _api_cache_clear(_PLANS_CACHE_URL)
+    return JSONResponse(result, status_code=status)
+
+
+def _close_plan(repo: str, number: int) -> tuple[int, dict]:
+    """Close a Plan, but only a Plan, and only once every Step is Done."""
+    issue = run_gh_json([
+        "issue", "view", str(number), "--repo", f"sil-ai/{repo}",
+        "--json", "body,labels",
+    ], timeout=15)
+    if PLAN_LABEL not in [l["name"] for l in issue.get("labels", [])]:
+        return 404, {"error": f"sil-ai/{repo}#{number} is not a Plan."}
+
+    steps, _ = parse_plan_body(issue.get("body") or "")
+    if not steps or any(not s["done"] for s in steps):
+        return 409, {"error": "Not every step is done yet."}
+
+    run_gh(
+        ["issue", "close", str(number), "--repo", f"sil-ai/{repo}"],
+        timeout=20, token=GH_WRITE_TOKEN,
+    )
+    return 200, {"closed": True}
