@@ -1,0 +1,93 @@
+name: CI-CD-Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+# The image is built on the droplet, which has a single vCPU. Serialize deploys
+# so two runs never build at once.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DEPLOY_DIR: github-pm-dashboard
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Linting
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install flake8
+          flake8 dashboard.py --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      # Build on the runner as a gate so a broken Dockerfile fails before
+      # production is touched.
+      - name: Validate Docker Image Build
+        run: |
+          DOCKER_BUILDKIT=1 docker build -t github-pm-dashboard-dashboard:ci .
+
+      - name: Validate docker-compose Configuration
+        run: |
+          DOMAIN=example.com docker compose config --quiet
+
+      - name: Set up SSH for Deployment
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.DROPLET_SSH_KEY }}
+
+      - name: Deploy to DigitalOcean Droplet
+        run: |
+          DROPLET_IP=${{ secrets.DROPLET_IP }}
+          echo "Deploying ${{ github.sha }} to $DROPLET_IP"
+
+          # The droplet keeps its own .env. It is gitignored, so `git clean -fd`
+          # leaves it in place and CI never writes secrets to the host.
+          ssh -o StrictHostKeyChecking=no ${{ secrets.DROPLET_USER }}@$DROPLET_IP << ENDSSH
+            set -e
+            cd ${{ env.DEPLOY_DIR }}
+
+            git fetch --all
+            git checkout main || git checkout -b main origin/main
+            git reset --hard origin/main
+            git clean -fd
+            echo "Synchronized to: \$(git rev-parse --short HEAD)"
+
+            sudo docker compose up -d --build
+            sudo docker image prune -af
+          ENDSSH
+
+      - name: Verify Deployment
+        run: |
+          DROPLET_IP=${{ secrets.DROPLET_IP }}
+          ssh -o StrictHostKeyChecking=no ${{ secrets.DROPLET_USER }}@$DROPLET_IP << ENDSSH
+            set -e
+            cd ${{ env.DEPLOY_DIR }}
+            sudo docker compose ps
+
+            sleep 10
+            STATUS=\$(sudo docker compose exec -T nginx \
+              wget -q -O /dev/null -S http://dashboard:8050/login 2>&1 \
+              | awk '/HTTP\//{print \$2}' | tail -1)
+
+            if [ "\$STATUS" = "200" ]; then
+              echo "Dashboard is responding (HTTP \$STATUS)"
+            else
+              echo "Health check failed (HTTP \$STATUS)"
+              sudo docker compose logs --tail 50 dashboard
+              exit 1
+            fi
+          ENDSSH
