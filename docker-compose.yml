@@ -1,6 +1,8 @@
 services:
   dashboard:
-    build: .
+    # Image is built and pushed by CI; the droplet only pulls it.
+    # DO_REGISTRY, IMAGE_NAME and IMAGE_TAG come from the .env on the host.
+    image: ${DO_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
     expose:
       - "8050"
     env_file:

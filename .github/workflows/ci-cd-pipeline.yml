@@ -5,13 +5,14 @@ on:
     branches:
       - main
 
-# The image is built on the droplet, which has a single vCPU. Serialize deploys
-# so two runs never build at once.
+# The droplet has a single vCPU. Serialize deploys so two runs never race on it.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 env:
+  DO_REGISTRY: registry.digitalocean.com/tools-intern
+  IMAGE_NAME: github-pm-dashboard
   DEPLOY_DIR: github-pm-dashboard
 
 jobs:
@@ -34,15 +35,39 @@ jobs:
           pip install flake8
           flake8 dashboard.py --count --select=E9,F63,F7,F82 --show-source --statistics
 
-      # Build on the runner as a gate so a broken Dockerfile fails before
-      # production is touched.
-      - name: Validate Docker Image Build
+      - name: Setup Digital Ocean CLI
         run: |
-          DOCKER_BUILDKIT=1 docker build -t github-pm-dashboard-dashboard:ci .
+          cd ~
+          wget -q https://github.com/digitalocean/doctl/releases/download/v1.104.0/doctl-1.104.0-linux-amd64.tar.gz
+          tar xf doctl-1.104.0-linux-amd64.tar.gz
+          sudo mv doctl /usr/local/bin
+          rm doctl-1.104.0-linux-amd64.tar.gz
+          doctl auth init --access-token ${{ secrets.DO_TOKEN }}
+          doctl registry login --expiry-seconds 3600
 
       - name: Validate docker-compose Configuration
         run: |
-          DOMAIN=example.com docker compose config --quiet
+          DOMAIN=example.com DO_REGISTRY=${{ env.DO_REGISTRY }} \
+            IMAGE_NAME=${{ env.IMAGE_NAME }} IMAGE_TAG=validate \
+            docker compose config --quiet
+
+      # Build on the runner, not on the droplet: the droplet has 1 vCPU and
+      # ~1 GB of RAM with no swap. Tagged with the commit SHA so a rollback is
+      # just IMAGE_TAG plus `docker compose up -d`.
+      - name: Build and Push Docker Image
+        run: |
+          docker pull ${{ env.DO_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            || echo "No existing image found, building from scratch."
+
+          DOCKER_BUILDKIT=1 docker build \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from ${{ env.DO_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            -t ${{ env.DO_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            -t ${{ env.DO_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            .
+
+          docker push ${{ env.DO_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.DO_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Set up SSH for Deployment
         uses: webfactory/ssh-agent@v0.5.3
@@ -54,8 +79,14 @@ jobs:
           DROPLET_IP=${{ secrets.DROPLET_IP }}
           echo "Deploying ${{ github.sha }} to $DROPLET_IP"
 
-          # The droplet keeps its own .env. It is gitignored, so `git clean -fd`
-          # leaves it in place and CI never writes secrets to the host.
+          # The droplet keeps its own .env (secrets plus DO_REGISTRY /
+          # IMAGE_NAME). It is gitignored, so `git clean -fd` leaves it in place
+          # and CI never writes secrets to the host — only the IMAGE_TAG line is
+          # rewritten, on the droplet, below.
+          #
+          # No `sudo` on the docker commands: the deploy user is in the docker
+          # group, and sudo would reset HOME to /root, where the registry
+          # credentials written by `doctl registry login` do not exist.
           ssh -o StrictHostKeyChecking=no ${{ secrets.DROPLET_USER }}@$DROPLET_IP << ENDSSH
             set -e
             cd ${{ env.DEPLOY_DIR }}
@@ -66,8 +97,14 @@ jobs:
             git clean -fd
             echo "Synchronized to: \$(git rev-parse --short HEAD)"
 
-            sudo docker compose up -d --build
-            sudo docker image prune -af
+            sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${{ github.sha }}|" .env
+
+            doctl auth init --access-token ${{ secrets.DO_TOKEN }}
+            doctl registry login
+
+            docker compose pull
+            docker compose up -d
+            docker image prune -af
           ENDSSH
 
       - name: Verify Deployment
@@ -76,10 +113,10 @@ jobs:
           ssh -o StrictHostKeyChecking=no ${{ secrets.DROPLET_USER }}@$DROPLET_IP << ENDSSH
             set -e
             cd ${{ env.DEPLOY_DIR }}
-            sudo docker compose ps
+            docker compose ps
 
             sleep 10
-            STATUS=\$(sudo docker compose exec -T nginx \
+            STATUS=\$(docker compose exec -T nginx \
               wget -q -O /dev/null -S http://dashboard:8050/login 2>&1 \
               | awk '/HTTP\//{print \$2}' | tail -1)
 
@@ -87,7 +124,7 @@ jobs:
               echo "Dashboard is responding (HTTP \$STATUS)"
             else
               echo "Health check failed (HTTP \$STATUS)"
-              sudo docker compose logs --tail 50 dashboard
+              docker compose logs --tail 50 dashboard
               exit 1
             fi
           ENDSSH
