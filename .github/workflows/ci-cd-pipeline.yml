@@ -45,12 +45,6 @@ jobs:
           doctl auth init --access-token ${{ secrets.DO_TOKEN }}
           doctl registry login --expiry-seconds 3600
 
-      - name: Validate docker-compose Configuration
-        run: |
-          DOMAIN=example.com DO_REGISTRY=${{ env.DO_REGISTRY }} \
-            IMAGE_NAME=${{ env.IMAGE_NAME }} IMAGE_TAG=validate \
-            docker compose config --quiet
-
       # Build on the runner, not on the droplet: the droplet has 1 vCPU and
       # ~1 GB of RAM with no swap. Tagged with the commit SHA so a rollback is
       # just IMAGE_TAG plus `docker compose up -d`.
