@@ -186,13 +186,13 @@ async def index(request: Request):
 
 @app.get("/api/active-repos")
 async def api_active_repos():
-    repos = get_active_repos()
+    repos = await asyncio.to_thread(get_active_repos)
     return JSONResponse(repos)
 
 
 @app.get("/api/repo-summaries")
 async def api_repo_summaries():
-    repos = get_active_repos()
+    repos = await asyncio.to_thread(get_active_repos)
     log.info("Fetching summaries for %d repos in parallel...", len(repos))
 
     def fetch_summary(repo):
@@ -284,7 +284,7 @@ async def api_repo_summaries():
 
 @app.get("/api/org-members")
 async def api_org_members():
-    members = run_gh_json(["api", "orgs/sil-ai/members", "--jq", "[.[].login]"])
+    members = await asyncio.to_thread(run_gh_json, ["api", "orgs/sil-ai/members", "--jq", "[.[].login]"])
     return JSONResponse(sorted(members))
 
 
@@ -318,21 +318,21 @@ async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
     start_str = start_dt.strftime("%Y-%m-%d")
     end_str = end_dt.strftime("%Y-%m-%d")
 
-    issues_closed = run_gh_json([
+    issues_closed = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai", "--state", "closed",
         "--json", "repository,title,closedAt,assignees",
         "--limit", "200",
         "--", f"closed:{start_str}..{end_str}",
     ])
 
-    issues_opened = run_gh_json([
+    issues_opened = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai",
         "--json", "repository,title,createdAt,assignees,labels",
         "--limit", "200",
         "--", f"created:{start_str}..{end_str}",
     ])
 
-    prs_merged = run_gh_json([
+    prs_merged = await asyncio.to_thread(run_gh_json, [
         "search", "prs", "--owner", "sil-ai", "--merged",
         "--json", "repository,title,updatedAt,author",
         "--limit", "200",
@@ -340,7 +340,7 @@ async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
     ])
 
     # Commit activity per active repo (parallel)
-    repos = get_active_repos()
+    repos = await asyncio.to_thread(get_active_repos)
     log.info("Fetching commits for %d repos (%s to %s)...", len(repos), start_str, end_str)
 
     def fetch_commits(repo):
@@ -382,7 +382,7 @@ async def api_overdue():
     seven_days_ago = since_date(7)
     thirty_days_ago = since_date(30)
 
-    aging_p0 = run_gh_json([
+    aging_p0 = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai", "--state", "open",
         "--label", "P0-critical",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
@@ -390,7 +390,7 @@ async def api_overdue():
         "--", f"created:<{seven_days_ago}",
     ])
 
-    aging_p1 = run_gh_json([
+    aging_p1 = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai", "--state", "open",
         "--label", "P1-high",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
@@ -398,7 +398,7 @@ async def api_overdue():
         "--", f"created:<{seven_days_ago}",
     ])
 
-    stale = run_gh_json([
+    stale = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai", "--state", "open",
         "--json", "repository,title,assignees,updatedAt,url",
         "--limit", "100",
@@ -414,14 +414,14 @@ async def api_overdue():
 
 @app.get("/api/priorities")
 async def api_priorities():
-    p0 = run_gh_json([
+    p0 = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai", "--state", "open",
         "--label", "P0-critical",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
         "--limit", "100",
     ])
 
-    p1 = run_gh_json([
+    p1 = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai", "--state", "open",
         "--label", "P1-high",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
@@ -440,20 +440,20 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
             cached["_stale"] = True
         return JSONResponse(cached)
 
-    issues = run_gh_json([
+    issues = await asyncio.to_thread(run_gh_json, [
         "issue", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
         "--json", "number,title,labels,assignees,createdAt,updatedAt,milestone,url",
         "--limit", "100",
     ])
 
-    prs = run_gh_json([
+    prs = await asyncio.to_thread(run_gh_json, [
         "pr", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
         "--json", "number,title,author,createdAt,reviewRequests,url,body,headRefName,isDraft",
         "--limit", "50",
     ])
 
     try:
-        milestones = run_gh_json([
+        milestones = await asyncio.to_thread(run_gh_json, [
             "api", f"repos/sil-ai/{repo}/milestones",
             "--jq", "[.[] | {title, due_on, open_issues, closed_issues, state}]",
         ])
@@ -461,7 +461,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
         milestones = []
 
     fourteen_days_ago = since_date(14)
-    recent_closed = run_gh_json([
+    recent_closed = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--repo", f"sil-ai/{repo}", "--state", "closed",
         "--json", "title,closedAt,assignees,url",
         "--limit", "50",
@@ -492,7 +492,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
 
     # Recent commits on main and release branches
     try:
-        branches = run_gh_json([
+        branches = await asyncio.to_thread(run_gh_json, [
             "api", f"repos/sil-ai/{repo}/branches?per_page=100",
             "--jq", "[.[].name]",
         ], timeout=10)
@@ -515,7 +515,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
     branch_commits: dict[str, list] = {}
     for branch in target_branches:
         try:
-            raw = run_gh([
+            raw = await asyncio.to_thread(run_gh, [
                 "api", f"repos/sil-ai/{repo}/commits?sha={branch}&since={commits_since}T00:00:00Z{until_param}&per_page=100",
                 "-q", '.[] | {sha: .sha[:7], date: .commit.author.date, author: (.author.login // .commit.author.name), message: (.commit.message | split("\n")[0])}',
             ], timeout=10)
@@ -540,7 +540,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
 
 @app.get("/api/pr-status")
 async def api_pr_status():
-    prs = run_gh_json([
+    prs = await asyncio.to_thread(run_gh_json, [
         "search", "prs", "--owner", "sil-ai", "--state", "open",
         "--json", "repository,title,author,createdAt,updatedAt,url,isDraft",
         "--limit", "200",
@@ -590,7 +590,7 @@ async def api_pr_status():
 
 @app.get("/api/actions")
 async def api_actions():
-    repos = get_active_repos()
+    repos = await asyncio.to_thread(get_active_repos)
     log.info("Fetching actions for %d repos in parallel...", len(repos))
 
     def fetch_runs(repo):
@@ -617,14 +617,14 @@ async def api_actions():
 
 @app.get("/api/my-tasks/{username}")
 async def api_my_tasks(username: str):
-    issues = run_gh_json([
+    issues = await asyncio.to_thread(run_gh_json, [
         "search", "issues", "--owner", "sil-ai", "--state", "open",
         "--assignee", username,
         "--json", "repository,title,labels,createdAt,updatedAt,url",
         "--limit", "100",
     ])
 
-    prs = run_gh_json([
+    prs = await asyncio.to_thread(run_gh_json, [
         "search", "prs", "--owner", "sil-ai", "--state", "open",
         "--author", username,
         "--json", "repository,title,createdAt,url",

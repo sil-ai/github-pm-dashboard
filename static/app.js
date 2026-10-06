@@ -109,10 +109,24 @@ async function fetchCached(url, onData) {
     onData(cached.data, true);
   }
   $('#refresh-btn').classList.add('refreshing');
-  const data = await fetchJson(url);
+  let data;
+  try {
+    data = await fetchJson(url);
+  } catch (e) {
+    if (gen !== fetchGen) return;
+    hideLoading();
+    $('#refresh-btn').classList.remove('refreshing');
+    if (!cached) {
+      content.innerHTML = `<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        Could not load ${escHtml(url)}: ${escHtml(e.message)}. Try the refresh button.</div>`;
+    }
+    return;
+  }
+  // A superseded request must not touch the spinner: the tab that replaced it
+  // owns the loading state now.
+  if (gen !== fetchGen) return;
   hideLoading();
   $('#refresh-btn').classList.remove('refreshing');
-  if (gen !== fetchGen) return;
   const isStale = data._stale;
   delete data._stale;
   cache[url] = { data, time: Date.now() };
