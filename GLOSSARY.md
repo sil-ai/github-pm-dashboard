@@ -8,8 +8,10 @@ wayfinder maps the team uses to plan efforts too big for one agent session.
 ### Reporting
 
 **Active repo**:
-A non-archived `sil-ai` repo updated within the last 90 days. Org-wide reports
-cover the active repos, not every repo.
+A non-archived `sil-ai` repo with a push in the last 90 days, plus the repos
+outside the org that the team works in (`EXTRA_REPOS` in `dashboard.py`, such as
+Paratext Assistant). Reports cover the active repos, not every repo. A repo is
+identified by its full `owner/name`; `sil-ai` repos are labelled without the owner.
 _Avoid_: live repo, current repo
 
 **Priority**:

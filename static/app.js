@@ -30,10 +30,12 @@ function fmtDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// Repos are identified by full owner/name; sil-ai's are labelled without it.
 function repoName(r) {
   if (typeof r === 'string') return r;
-  return r?.name || r?.fullName?.split('/')[1] || 'unknown';
+  return r?.nameWithOwner || r?.fullName || 'unknown';
 }
+function shortRepo(name) { return name.replace(/^sil-ai\//, ''); }
 
 let displayNames = {};
 const displayNamesReady = fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
@@ -84,7 +86,7 @@ function issueUrl(item) {
 }
 
 function repoLink(name) {
-  return `<a href="https://github.com/sil-ai/${name}" target="_blank" class="font-medium text-accent hover:text-white transition-colors">${name}</a>`;
+  return `<a href="https://github.com/${name}" target="_blank" class="font-medium text-accent hover:text-white transition-colors">${shortRepo(name)}</a>`;
 }
 
 function escHtml(s) {
@@ -200,7 +202,7 @@ function renderSummary(data) {
       const commitsId = `commits-${repo.replace(/[^a-zA-Z0-9]/g, '-')}`;
       html += `<div id="${commitsId}" class="hidden">
         <ul class="ml-5 mt-1 text-sm text-gray-300 list-disc">`;
-      const commitLink = (c) => `<a href="https://github.com/sil-ai/${repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs ml-1">${c.sha}</a>`;
+      const commitLink = (c) => `<a href="https://github.com/${repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs ml-1">${c.sha}</a>`;
       const commitAuthor = (c) => `<span class="text-gray-500 text-xs ml-1">${displayName(c.author)}</span>`;
       for (const c of commits) {
         html += `<li>${escHtml(c.message)}${commitLink(c)}${commitAuthor(c)}</li>`;
@@ -673,6 +675,8 @@ const projects = {
   'FaithBridge': ['faithbridge-obt-django-app'],
   'Alpha2': ['madlad-finetuning', 'T5Gemma-finetuning', 'translator', 'translation-tts-app'],
   'GMO Copilot': ['gmo-ai-copilot'],
+  'LAVA': ['lava-research', 'lava-django-app'],
+  'Paratext Assistant': ['paranext/paratext-assistant', 'sillsdev/paratext-assistant-server'],
   'Infra': ['observability-library', 'observability-service', 'playwright-tests', 'shared-skills'],
 };
 let activeProject = null;
@@ -686,7 +690,7 @@ async function loadRepoStatus() {
 
 function renderRepoCards(summaries) {
   const filtered = activeProject
-    ? summaries.filter(r => projects[activeProject]?.includes(r.name))
+    ? summaries.filter(r => projects[activeProject]?.includes(shortRepo(r.name)))
     : summaries;
 
   let html = `<h2 class="text-2xl font-bold mb-4">Repo Status</h2>
@@ -720,7 +724,7 @@ function renderRepoCards(summaries) {
 
     html += `<div class="bg-panel rounded-xl p-4 border ${border} cursor-pointer hover:border-accent/50 hover:shadow-lg hover:shadow-black/10 transition-all duration-200 repo-card" data-repo="${repo.name}">
       <div class="flex items-center justify-between mb-2">
-        <div class="font-semibold text-white truncate">${repo.name}</div>
+        <div class="font-semibold text-white truncate">${shortRepo(repo.name)}</div>
         ${lastCommit ? `<span class="text-xs text-gray-500 whitespace-nowrap ml-2">${lastCommit}</span>` : ''}
       </div>
       <div class="flex items-center gap-4 text-sm mb-2">
@@ -818,7 +822,7 @@ function renderRepoModal(data) {
         <ul class="ml-5 mt-1 text-sm list-disc space-y-0.5">`;
       for (const c of commits) {
         html += `<li>
-          <a href="https://github.com/sil-ai/${data.repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs">${c.sha}</a>
+          <a href="https://github.com/${data.repo}/commit/${c.sha}" target="_blank" class="text-gray-500 hover:text-accent font-mono text-xs">${c.sha}</a>
           ${escHtml(c.message)}
           <span class="text-gray-500 text-xs">${displayName(c.author)} - ${fmtDate(c.date)}</span>
         </li>`;
@@ -1059,7 +1063,7 @@ function renderTicket(map, t) {
     frontier: 'bg-accent', claimed: 'bg-amber-400', blocked: 'bg-gray-600',
     resolved: 'bg-emerald-400', out_of_scope: 'bg-gray-700',
   }[t.status];
-  const ref = t.repo === map.repo ? `#${t.number}` : `${t.repo}#${t.number}`;
+  const ref = t.repo === map.repo ? `#${t.number}` : `${shortRepo(t.repo)}#${t.number}`;
   const state = {
     claimed: `<span class="text-amber-400">claimed · ${t.assignees.map(displayName).join(', ')}</span>`,
     blocked: `<span class="text-gray-500">blocked by ${t.blockedBy} open ticket${t.blockedBy === 1 ? '' : 's'}</span>`,
@@ -1109,7 +1113,7 @@ function renderMap(map) {
         focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none">
       <span class="text-muted text-xs w-3 shrink-0">${open ? '&#9662;' : '&#9656;'}</span>
       <span class="font-semibold text-gray-100 text-sm min-w-0 flex-1 truncate" title="${escHtml(map.title)}">${escHtml(map.title)}</span>
-      <span class="rounded bg-white/[0.06] px-1.5 py-px text-[10px] font-mono text-gray-400">${escHtml(map.repo)}</span>
+      <span class="rounded bg-white/[0.06] px-1.5 py-px text-[10px] font-mono text-gray-400">${escHtml(shortRepo(map.repo))}</span>
       <span class="ml-auto flex items-center gap-2.5 shrink-0">
         ${map.state === 'open' && frontier.length ? `<span class="text-[11px] text-accent">${frontier.length} on the frontier</span>` : ''}
         ${map.state === 'open' ? `<span class="w-16 h-1 rounded-full bg-white/10 overflow-hidden">
@@ -1167,7 +1171,7 @@ function renderMaps(data) {
 
   let html = `<div class="flex items-baseline justify-between gap-4 mb-5 flex-wrap">
     <h2 class="text-2xl font-bold">Maps</h2>
-    <p class="text-xs text-muted">Wayfinder maps across sil-ai. Tickets are claimed and resolved by
+    <p class="text-xs text-muted">Wayfinder maps across the team's repos. Tickets are claimed and resolved by
       <span class="font-mono text-accent">/wayfinder</span> sessions, not here.</p>
   </div>`;
 
