@@ -793,3 +793,121 @@ async def api_summarize_commits(request: Request):
                 results[repo] = summary
 
     return JSONResponse({"summaries": results})
+
+
+# --- Wayfinder maps (read-only view of `wayfinder:map` issues and their tickets) ---
+
+MAP_LABEL = "wayfinder:map"
+MAP_CLOSED_DAYS = 14
+_MAP_SECTIONS = {
+    "destination": "destination",
+    "notes": "notes",
+    "decisions so far": "decisions",
+    "not yet specified": "fog",
+    "out of scope": "outOfScope",
+}
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+
+def parse_map_body(body: str) -> dict:
+    """Split a map body into its wayfinder sections, keyed by _MAP_SECTIONS."""
+    sections = {key: "" for key in _MAP_SECTIONS.values()}
+    current, lines = None, []
+    for line in _HTML_COMMENT_RE.sub("", body).splitlines() + ["## "]:
+        if line.startswith("## "):
+            if current:
+                sections[current] = re.sub(r"\n{3,}", "\n\n", "\n".join(lines).strip())
+            current, lines = _MAP_SECTIONS.get(line[3:].strip().lower()), []
+        elif current:
+            lines.append(line)
+    return sections
+
+
+def _ticket_status(t: dict) -> str:
+    """Where a ticket sits on the map. The frontier is open, unblocked and unclaimed."""
+    if t["state"] == "closed":
+        return "out_of_scope" if t["stateReason"] == "not_planned" else "resolved"
+    if t["assignees"]:
+        return "claimed"
+    if t["blockedBy"]:
+        return "blocked"
+    return "frontier"
+
+
+def search_maps() -> list[dict]:
+    """Open maps org-wide, plus those closed in the last MAP_CLOSED_DAYS."""
+    fields = "repository,number,title,url,state,createdAt,updatedAt"
+    open_issues = run_gh_json([
+        "search", "issues", "--owner", "sil-ai", "--label", MAP_LABEL,
+        "--state", "open", "--json", fields, "--limit", "50",
+    ], timeout=20)
+    closed_issues = run_gh_json([
+        "search", "issues", "--owner", "sil-ai", "--label", MAP_LABEL,
+        "--state", "closed", "--json", fields, "--limit", "50",
+        "--", f"closed:>{since_date(MAP_CLOSED_DAYS)}",
+    ], timeout=20)
+    return [*open_issues, *closed_issues]
+
+
+def fetch_map(listed: dict) -> dict | None:
+    repo = listed["repository"]["name"]
+    number = listed["number"]
+    try:
+        issue = run_gh_json([
+            "api", f"repos/sil-ai/{repo}/issues/{number}",
+            "--jq", "{title, html_url, body, state, closed_at, updated_at}",
+        ], timeout=15)
+        # Sub-issue order is map order: the first frontier ticket is the one to take.
+        tickets = run_gh_json([
+            "api", f"repos/sil-ai/{repo}/issues/{number}/sub_issues?per_page=100",
+            "--jq", "[.[] | {number, title, url: .html_url, state, stateReason: .state_reason,"
+                    " repo: (.repository_url | split(\"/\") | last),"
+                    " labels: [.labels[].name], assignees: [.assignees[].login],"
+                    " blockedBy: (.issue_dependencies_summary.blocked_by // 0), closedAt: .closed_at}]",
+        ], timeout=15)
+    except Exception as e:
+        log.warning("  %s#%s: map fetch failed (%s)", repo, number, e)
+        return None
+
+    for t in tickets:
+        t["type"] = next((l.split(":", 1)[1] for l in t.pop("labels")
+                          if l.startswith("wayfinder:") and l != MAP_LABEL), "")
+        t["status"] = _ticket_status(t)
+    frontier = [t for t in tickets if t["status"] == "frontier"]
+    return {
+        "repo": repo,
+        "number": number,
+        "title": issue["title"],
+        "url": issue["html_url"],
+        "state": issue["state"],
+        "closedAt": issue.get("closed_at"),
+        "updatedAt": issue.get("updated_at"),
+        **parse_map_body(issue.get("body") or ""),
+        "tickets": tickets,
+        "resolved": sum(1 for t in tickets if t["status"] == "resolved"),
+        "total": sum(1 for t in tickets if t["status"] != "out_of_scope"),
+        "nextUp": frontier[0]["number"] if frontier else None,
+    }
+
+
+@app.get("/api/maps")
+async def api_maps(fresh: str = ""):
+    cache_url = "/api/maps"
+    cached, is_stale = (None, True) if fresh else _api_cache_get(cache_url)
+    if cached:
+        if is_stale:
+            cached["_stale"] = True
+        return JSONResponse(cached)
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        listed = await loop.run_in_executor(pool, search_maps)
+        log.info("Fetching %d wayfinder maps in parallel...", len(listed))
+        maps = await asyncio.gather(
+            *[loop.run_in_executor(pool, fetch_map, m) for m in listed]
+        )
+
+    maps = sorted((m for m in maps if m), key=lambda m: m["updatedAt"] or "", reverse=True)
+    result = {"maps": maps}
+    _api_cache_set(cache_url, result)
+    return JSONResponse(result)

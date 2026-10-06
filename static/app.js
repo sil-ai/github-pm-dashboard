@@ -38,7 +38,8 @@ function repoName(r) {
 let displayNames = {};
 const displayNamesReady = fetchJson('/api/display-names').then(names => { displayNames = names; }).catch(() => {});
 function displayName(login) {
-  const name = displayNames[login] || `@${login}`;
+  const custom = Object.hasOwn(displayNames, login) ? `${displayNames[login]}` : '';
+  const name = escHtml(custom || `@${login}`);
   return `<span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium" style="background:rgba(255,255,255,0.08);color:#c5c7de">${name}</span>`;
 }
 
@@ -88,7 +89,7 @@ function repoLink(name) {
 
 function escHtml(s) {
   if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 async function fetchJson(url) {
@@ -992,10 +993,197 @@ function renderMyTasksData(user, data) {
   el.innerHTML = html;
 }
 
+// --- Wayfinder maps (read-only) ---
+
+const mapOpen = new Set();
+let mapOpenInit = false;
+let mapsData = { maps: [] };
+
+const ticketTypes = {
+  grilling: { style: 'bg-violet-500/15 text-violet-300', mode: 'HITL' },
+  prototype: { style: 'bg-sky-500/15 text-sky-300', mode: 'HITL' },
+  research: { style: 'bg-emerald-500/15 text-emerald-300', mode: 'AFK' },
+  task: { style: 'bg-amber-500/15 text-amber-300', mode: 'HITL or AFK' },
+};
+
+// Escapes first, then renders the inline markdown map bodies lean on: links,
+// bold and code. Only http(s) links become anchors.
+function mdInline(s) {
+  return escHtml(s)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2" target="_blank" class="text-accent hover:text-white">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="text-gray-200">$1</strong>')
+    .replace(/`([^`]+)`/g, '<code class="font-mono text-[11px] text-gray-300">$1</code>');
+}
+
+function ticketBadge(type) {
+  if (!type) return '';
+  const t = Object.hasOwn(ticketTypes, type) ? ticketTypes[type] : ticketTypes.task;
+  return `<span class="rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wider ${t.style}"
+    title="${t.mode}">${escHtml(type)}</span>`;
+}
+
+function renderTicket(map, t) {
+  const dot = {
+    frontier: 'bg-accent', claimed: 'bg-amber-400', blocked: 'bg-gray-600',
+    resolved: 'bg-emerald-400', out_of_scope: 'bg-gray-700',
+  }[t.status];
+  const ref = t.repo === map.repo ? `#${t.number}` : `${t.repo}#${t.number}`;
+  const state = {
+    claimed: `<span class="text-amber-400">claimed · ${t.assignees.map(displayName).join(', ')}</span>`,
+    blocked: `<span class="text-gray-500">blocked by ${t.blockedBy} open ticket${t.blockedBy === 1 ? '' : 's'}</span>`,
+    resolved: `<span class="text-muted">resolved ${timeAgo(t.closedAt)}</span>`,
+    out_of_scope: `<span class="text-muted">ruled out of scope</span>`,
+  }[t.status] || '';
+  const closed = t.status === 'resolved' || t.status === 'out_of_scope';
+  return `<div class="flex items-baseline gap-2.5 py-1">
+    <span class="w-1.5 h-1.5 rounded-full shrink-0 translate-y-[-2px] ${dot}"></span>
+    <div class="min-w-0 flex-1 flex items-baseline gap-2 flex-wrap">
+      <a href="${t.url}" target="_blank" class="text-sm hover:text-accent ${closed ? 'text-gray-500' : 'text-gray-200'}">${escHtml(t.title)}</a>
+      <span class="font-mono text-[11px] text-muted">${escHtml(ref)}</span>
+      ${ticketBadge(t.type)}
+      ${t.number === map.nextUp ? '<span class="rounded bg-accent/20 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent" title="First frontier ticket in map order">next up</span>' : ''}
+      <span class="text-[11px]">${state}</span>
+    </div>
+  </div>`;
+}
+
+function mapSection(title, text, open = false) {
+  if (!text) return '';
+  return `<details class="mb-3" ${open ? 'open' : ''}>
+    <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 list-none">
+      &#9656; ${title}</summary>
+    <div class="mt-2 text-xs text-gray-400 whitespace-pre-wrap border-l-2 border-border pl-3">${mdInline(text)}</div>
+  </details>`;
+}
+
+function ticketGroup(map, title, tickets) {
+  if (!tickets.length) return '';
+  return `<div class="mb-3">
+    <h4 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-1">${title} (${tickets.length})</h4>
+    ${tickets.map(t => renderTicket(map, t)).join('')}
+  </div>`;
+}
+
+function renderMap(map) {
+  const key = `${map.repo}#${map.number}`;
+  const open = mapOpen.has(key);
+  const by = status => map.tickets.filter(t => t.status === status);
+  const frontier = by('frontier');
+  const pct = map.total ? Math.round((map.resolved / map.total) * 100) : 0;
+
+  let html = `<div class="bg-panel border border-border rounded-xl mb-3 overflow-hidden">
+    <button data-map-toggle="${escHtml(key)}"
+      class="w-full flex flex-wrap items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors
+        focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none">
+      <span class="text-muted text-xs w-3 shrink-0">${open ? '&#9662;' : '&#9656;'}</span>
+      <span class="font-semibold text-gray-100 text-sm min-w-0 flex-1 truncate" title="${escHtml(map.title)}">${escHtml(map.title)}</span>
+      <span class="rounded bg-white/[0.06] px-1.5 py-px text-[10px] font-mono text-gray-400">${escHtml(map.repo)}</span>
+      <span class="ml-auto flex items-center gap-2.5 shrink-0">
+        ${map.state === 'open' && frontier.length ? `<span class="text-[11px] text-accent">${frontier.length} on the frontier</span>` : ''}
+        ${map.state === 'open' ? `<span class="w-16 h-1 rounded-full bg-white/10 overflow-hidden">
+          <span class="block h-full bg-emerald-400/80" style="width:${pct}%"></span></span>` : ''}
+        <span class="text-xs tabular-nums text-muted" title="Tickets resolved">${map.resolved}/${map.total}</span>
+        ${map.state !== 'open' ? `<span class="text-[11px] text-muted">closed ${timeAgo(map.closedAt)}</span>` : ''}
+      </span>
+    </button>`;
+
+  if (open) {
+    html += `<div class="px-4 pb-4 border-t border-border/60 pt-3">`;
+    if (map.destination) {
+      html += `<div class="mb-4">
+        <h4 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-1">Destination</h4>
+        <div class="text-sm text-gray-300 whitespace-pre-wrap">${mdInline(map.destination)}</div>
+      </div>`;
+    }
+    if (!map.tickets.length) {
+      html += `<p class="text-sm text-gray-500 mb-3">No tickets — the map has no sub-issues.</p>`;
+    }
+    html += ticketGroup(map, 'Frontier', frontier);
+    html += ticketGroup(map, 'Claimed', by('claimed'));
+    html += ticketGroup(map, 'Blocked', by('blocked'));
+    const closed = [...by('resolved'), ...by('out_of_scope')];
+    if (closed.length) {
+      html += `<details class="mb-3">
+        <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 list-none">
+          &#9656; Closed tickets (${closed.length})</summary>
+        <div class="mt-1">${closed.map(t => renderTicket(map, t)).join('')}</div>
+      </details>`;
+    }
+    html += mapSection('Decisions so far', map.decisions);
+    html += mapSection('Not yet specified', map.fog);
+    html += mapSection('Out of scope', map.outOfScope);
+    html += mapSection('Notes', map.notes);
+    html += `<div class="mt-3 pt-3 border-t border-border/60">
+      <a href="${map.url}" target="_blank" class="text-[11px] text-muted hover:text-accent">open map &#8599;</a>
+    </div></div>`;
+  }
+  return html + `</div>`;
+}
+
+function renderMaps(data) {
+  mapsData = data;
+  const maps = data.maps || [];
+  const active = maps.filter(m => m.state === 'open');
+  const done = maps.filter(m => m.state !== 'open');
+
+  // Open the first map with something takeable, so the tab lands on a frontier.
+  const first = active.find(m => m.nextUp !== null) || active[0];
+  if (!mapOpenInit && first) {
+    mapOpen.add(`${first.repo}#${first.number}`);
+    mapOpenInit = true;
+  }
+
+  let html = `<div class="flex items-baseline justify-between gap-4 mb-5 flex-wrap">
+    <h2 class="text-2xl font-bold">Maps</h2>
+    <p class="text-xs text-muted">Wayfinder maps across sil-ai. Tickets are claimed and resolved by
+      <span class="font-mono text-accent">/wayfinder</span> sessions, not here.</p>
+  </div>`;
+
+  if (!maps.length) {
+    html += `<div class="bg-panel border border-border rounded-xl p-8 text-center">
+      <p class="text-gray-400 mb-1">No maps yet.</p>
+      <p class="text-sm text-gray-500">Chart one from any repo with
+        <span class="font-mono text-accent">/wayfinder</span>.</p>
+    </div>`;
+    content.innerHTML = html;
+    return;
+  }
+
+  html += `<h3 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">Open (${active.length})</h3>`;
+  html += active.length ? active.map(renderMap).join('')
+    : `<p class="text-sm text-gray-500 mb-4">No open maps.</p>`;
+
+  if (done.length) {
+    html += `<details class="mt-6">
+      <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 mb-2 list-none">
+        &#9656; Closed · last 14 days (${done.length})</summary>
+      <div class="mt-2">${done.map(renderMap).join('')}</div>
+    </details>`;
+  }
+
+  content.innerHTML = html;
+}
+
+async function loadMaps() {
+  await displayNamesReady;
+  if (!cache['/api/maps']) showLoading();
+  await fetchCached('/api/maps', renderMaps);
+}
+
+content.addEventListener('click', (e) => {
+  const toggle = e.target.closest('[data-map-toggle]');
+  if (!toggle) return;
+  const key = toggle.dataset.mapToggle;
+  mapOpen.has(key) ? mapOpen.delete(key) : mapOpen.add(key);
+  renderMaps(mapsData);
+});
+
 // --- Tab navigation ---
 
 const tabHandlers = {
   'summary': loadSummary,
+  'maps': loadMaps,
   'overdue': loadOverdue,
   'priorities': loadPriorities,
   'pr-status': loadPrStatus,
@@ -1008,6 +1196,7 @@ function activateTab(tab) {
   $$('.tab-btn').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
   if (btn) btn.classList.add('active');
+  $('#range-controls').classList.toggle('hidden', tab === 'maps');
   tabHandlers[tab]();
 }
 
