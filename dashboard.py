@@ -83,16 +83,25 @@ def run_gh_json(args: list[str], timeout: int = 60) -> list | dict:
     return json.loads(out)
 
 
+# Repos outside the org that the team works in, reported as if they were in it.
+EXTRA_REPOS = ["paranext/paratext-assistant", "sillsdev/paratext-assistant-server"]
+# gh search sends GitHub's advanced syntax, where a space is AND, so the org and
+# the extra repos are OR'd inside their own parentheses, as separate arguments.
+SEARCH_SCOPE = ["(", "org:sil-ai", *[t for r in EXTRA_REPOS for t in ("OR", f"repo:{r}")], ")"]
+
+
 def get_active_repos() -> list[str]:
+    """Full owner/name of every repo the dashboard reports on."""
     repos = run_gh_json([
-        "repo", "list", "sil-ai", "--limit", "100",
-        "--json", "name,updatedAt,isArchived",
+        "repo", "list", "sil-ai", "--limit", "200",
+        "--json", "nameWithOwner,pushedAt,isArchived",
     ])
+    # pushedAt, not updatedAt: updatedAt tracks repo metadata and ignores pushes.
     cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
     return sorted([
-        r["name"] for r in repos
-        if not r.get("isArchived") and r["updatedAt"] >= cutoff
-    ])
+        r["nameWithOwner"] for r in repos
+        if not r.get("isArchived") and r["pushedAt"] >= cutoff
+    ]) + EXTRA_REPOS
 
 
 def days_ago(date_str: str) -> int:
@@ -198,12 +207,12 @@ async def api_repo_summaries():
     def fetch_summary(repo):
         try:
             issues = run_gh_json([
-                "issue", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
+                "issue", "list", "--repo", repo, "--state", "open",
                 "--json", "number,title,labels,url",
                 "--limit", "200",
             ], timeout=15)
             prs = run_gh_json([
-                "pr", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
+                "pr", "list", "--repo", repo, "--state", "open",
                 "--json", "number,title,author,url,isDraft",
                 "--limit", "50",
             ], timeout=15)
@@ -240,7 +249,7 @@ async def api_repo_summaries():
             fourteen_ago = since_date(14)
             try:
                 raw = run_gh([
-                    "api", f"repos/sil-ai/{repo}/commits?since={since_date(28)}T00:00:00Z&per_page=100",
+                    "api", f"repos/{repo}/commits?since={since_date(28)}T00:00:00Z&per_page=100",
                     "-q", ".[].commit.author.date",
                 ], timeout=10)
                 commit_dates = [line.strip() for line in raw.splitlines() if line.strip()] if raw else []
@@ -319,24 +328,24 @@ async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
     end_str = end_dt.strftime("%Y-%m-%d")
 
     issues_closed = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai", "--state", "closed",
+        "search", "issues", "--state", "closed",
         "--json", "repository,title,closedAt,assignees",
         "--limit", "200",
-        "--", f"closed:{start_str}..{end_str}",
+        "--", *SEARCH_SCOPE, f"closed:{start_str}..{end_str}",
     ])
 
     issues_opened = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai",
+        "search", "issues",
         "--json", "repository,title,createdAt,assignees,labels",
         "--limit", "200",
-        "--", f"created:{start_str}..{end_str}",
+        "--", *SEARCH_SCOPE, f"created:{start_str}..{end_str}",
     ])
 
     prs_merged = await asyncio.to_thread(run_gh_json, [
-        "search", "prs", "--owner", "sil-ai", "--merged",
+        "search", "prs", "--merged",
         "--json", "repository,title,updatedAt,author",
         "--limit", "200",
-        "--", f"merged:{start_str}..{end_str}",
+        "--", *SEARCH_SCOPE, f"merged:{start_str}..{end_str}",
     ])
 
     # Commit activity per active repo (parallel)
@@ -346,7 +355,7 @@ async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
     def fetch_commits(repo):
         try:
             raw = run_gh([
-                "api", f"repos/sil-ai/{repo}/commits?since={start_str}T00:00:00Z&until={end_str}T23:59:59Z&per_page=100",
+                "api", f"repos/{repo}/commits?since={start_str}T00:00:00Z&until={end_str}T23:59:59Z&per_page=100",
                 "-q", '.[] | {sha: .sha[:7], date: .commit.author.date, author: (.author.login // .commit.author.name), message: (.commit.message | split("\n")[0])}',
             ], timeout=15)
             if raw:
@@ -383,26 +392,26 @@ async def api_overdue():
     thirty_days_ago = since_date(30)
 
     aging_p0 = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai", "--state", "open",
+        "search", "issues", "--state", "open",
         "--label", "P0-critical",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
         "--limit", "100",
-        "--", f"created:<{seven_days_ago}",
+        "--", *SEARCH_SCOPE, f"created:<{seven_days_ago}",
     ])
 
     aging_p1 = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai", "--state", "open",
+        "search", "issues", "--state", "open",
         "--label", "P1-high",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
         "--limit", "100",
-        "--", f"created:<{seven_days_ago}",
+        "--", *SEARCH_SCOPE, f"created:<{seven_days_ago}",
     ])
 
     stale = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai", "--state", "open",
+        "search", "issues", "--state", "open",
         "--json", "repository,title,assignees,updatedAt,url",
         "--limit", "100",
-        "--", f"updated:<{thirty_days_ago}",
+        "--", *SEARCH_SCOPE, f"updated:<{thirty_days_ago}",
     ])
 
     return JSONResponse({
@@ -415,23 +424,25 @@ async def api_overdue():
 @app.get("/api/priorities")
 async def api_priorities():
     p0 = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai", "--state", "open",
+        "search", "issues", "--state", "open",
         "--label", "P0-critical",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
         "--limit", "100",
+        "--", *SEARCH_SCOPE,
     ])
 
     p1 = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai", "--state", "open",
+        "search", "issues", "--state", "open",
         "--label", "P1-high",
         "--json", "repository,title,assignees,createdAt,updatedAt,url",
         "--limit", "100",
+        "--", *SEARCH_SCOPE,
     ])
 
     return JSONResponse({"p0": p0, "p1": p1})
 
 
-@app.get("/api/repo-status/{repo}")
+@app.get("/api/repo-status/{repo:path}")
 async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str = ""):
     cache_url = f"/api/repo-status/{repo}?start={start}&end={end}"
     cached, is_stale = await asyncio.to_thread(_api_cache_get, cache_url)
@@ -441,20 +452,20 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
         return JSONResponse(cached)
 
     issues = await asyncio.to_thread(run_gh_json, [
-        "issue", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
+        "issue", "list", "--repo", repo, "--state", "open",
         "--json", "number,title,labels,assignees,createdAt,updatedAt,milestone,url",
         "--limit", "100",
     ])
 
     prs = await asyncio.to_thread(run_gh_json, [
-        "pr", "list", "--repo", f"sil-ai/{repo}", "--state", "open",
+        "pr", "list", "--repo", repo, "--state", "open",
         "--json", "number,title,author,createdAt,reviewRequests,url,body,headRefName,isDraft",
         "--limit", "50",
     ])
 
     try:
         milestones = await asyncio.to_thread(run_gh_json, [
-            "api", f"repos/sil-ai/{repo}/milestones",
+            "api", f"repos/{repo}/milestones",
             "--jq", "[.[] | {title, due_on, open_issues, closed_issues, state}]",
         ])
     except Exception:
@@ -462,7 +473,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
 
     fourteen_days_ago = since_date(14)
     recent_closed = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--repo", f"sil-ai/{repo}", "--state", "closed",
+        "search", "issues", "--repo", repo, "--state", "closed",
         "--json", "title,closedAt,assignees,url",
         "--limit", "50",
         "--", f"closed:>{fourteen_days_ago}",
@@ -493,7 +504,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
     # Recent commits on main and release branches
     try:
         branches = await asyncio.to_thread(run_gh_json, [
-            "api", f"repos/sil-ai/{repo}/branches?per_page=100",
+            "api", f"repos/{repo}/branches?per_page=100",
             "--jq", "[.[].name]",
         ], timeout=10)
     except Exception:
@@ -516,7 +527,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
     for branch in target_branches:
         try:
             raw = await asyncio.to_thread(run_gh, [
-                "api", f"repos/sil-ai/{repo}/commits?sha={branch}&since={commits_since}T00:00:00Z{until_param}&per_page=100",
+                "api", f"repos/{repo}/commits?sha={branch}&since={commits_since}T00:00:00Z{until_param}&per_page=100",
                 "-q", '.[] | {sha: .sha[:7], date: .commit.author.date, author: (.author.login // .commit.author.name), message: (.commit.message | split("\n")[0])}',
             ], timeout=10)
             if raw:
@@ -541,27 +552,28 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
 @app.get("/api/pr-status")
 async def api_pr_status():
     prs = await asyncio.to_thread(run_gh_json, [
-        "search", "prs", "--owner", "sil-ai", "--state", "open",
+        "search", "prs", "--state", "open",
         "--json", "repository,title,author,createdAt,updatedAt,url,isDraft",
         "--limit", "200",
+        "--", *SEARCH_SCOPE,
     ])
 
     log.info("Fetching review info for %d PRs in parallel...", len(prs))
 
     def fetch_reviews(pr):
-        repo = pr["repository"]["name"]
+        repo = pr["repository"]["nameWithOwner"]
         # Extract PR number from URL
         pr_number = pr["url"].rstrip("/").split("/")[-1]
         try:
             reviews = run_gh_json([
-                "api", f"repos/sil-ai/{repo}/pulls/{pr_number}/reviews",
+                "api", f"repos/{repo}/pulls/{pr_number}/reviews",
                 "--jq", "[.[] | {user: .user.login, state: .state}]",
             ], timeout=10)
         except Exception:
             reviews = []
         try:
             requested = run_gh_json([
-                "api", f"repos/sil-ai/{repo}/pulls/{pr_number}/requested_reviewers",
+                "api", f"repos/{repo}/pulls/{pr_number}/requested_reviewers",
                 "--jq", "{users: [.users[].login], teams: [.teams[].slug]}",
             ], timeout=10)
         except Exception:
@@ -596,7 +608,7 @@ async def api_actions():
     def fetch_runs(repo):
         try:
             runs = run_gh_json([
-                "api", f"repos/sil-ai/{repo}/actions/runs?per_page=5",
+                "api", f"repos/{repo}/actions/runs?per_page=5",
                 "--jq", "[.workflow_runs[] | {id, name, head_branch, status, conclusion, created_at, updated_at, html_url, run_number, event}]",
             ], timeout=15)
             if runs:
@@ -618,17 +630,19 @@ async def api_actions():
 @app.get("/api/my-tasks/{username}")
 async def api_my_tasks(username: str):
     issues = await asyncio.to_thread(run_gh_json, [
-        "search", "issues", "--owner", "sil-ai", "--state", "open",
+        "search", "issues", "--state", "open",
         "--assignee", username,
         "--json", "repository,title,labels,createdAt,updatedAt,url",
         "--limit", "100",
+        "--", *SEARCH_SCOPE,
     ])
 
     prs = await asyncio.to_thread(run_gh_json, [
-        "search", "prs", "--owner", "sil-ai", "--state", "open",
+        "search", "prs", "--state", "open",
         "--author", username,
         "--json", "repository,title,createdAt,url",
         "--limit", "50",
+        "--", *SEARCH_SCOPE,
     ])
 
     return JSONResponse({"issues": issues, "prs": prs})
@@ -843,30 +857,31 @@ def search_maps() -> list[dict]:
     """Open maps org-wide, plus those closed in the last MAP_CLOSED_DAYS."""
     fields = "repository,number,title,url,state,createdAt,updatedAt"
     open_issues = run_gh_json([
-        "search", "issues", "--owner", "sil-ai", "--label", MAP_LABEL,
+        "search", "issues", "--label", MAP_LABEL,
         "--state", "open", "--json", fields, "--limit", "50",
+        "--", *SEARCH_SCOPE,
     ], timeout=20)
     closed_issues = run_gh_json([
-        "search", "issues", "--owner", "sil-ai", "--label", MAP_LABEL,
+        "search", "issues", "--label", MAP_LABEL,
         "--state", "closed", "--json", fields, "--limit", "50",
-        "--", f"closed:>{since_date(MAP_CLOSED_DAYS)}",
+        "--", *SEARCH_SCOPE, f"closed:>{since_date(MAP_CLOSED_DAYS)}",
     ], timeout=20)
     return [*open_issues, *closed_issues]
 
 
 def fetch_map(listed: dict) -> dict | None:
-    repo = listed["repository"]["name"]
+    repo = listed["repository"]["nameWithOwner"]
     number = listed["number"]
     try:
         issue = run_gh_json([
-            "api", f"repos/sil-ai/{repo}/issues/{number}",
+            "api", f"repos/{repo}/issues/{number}",
             "--jq", "{title, html_url, body, state, closed_at, updated_at}",
         ], timeout=15)
         # Sub-issue order is map order: the first frontier ticket is the one to take.
         tickets = run_gh_json([
-            "api", f"repos/sil-ai/{repo}/issues/{number}/sub_issues?per_page=100",
+            "api", f"repos/{repo}/issues/{number}/sub_issues?per_page=100",
             "--jq", "[.[] | {number, title, url: .html_url, state, stateReason: .state_reason,"
-                    " repo: (.repository_url | split(\"/\") | last),"
+                    " repo: (.repository_url | split(\"/\") | .[-2:] | join(\"/\")),"
                     " labels: [.labels[].name], assignees: [.assignees[].login],"
                     " blockedBy: (.issue_dependencies_summary.blocked_by // 0), closedAt: .closed_at}]",
         ], timeout=15)

@@ -69,8 +69,10 @@ New routes must match the established conventions — flag deviations:
 - **gh access:** always go through `run_gh` / `run_gh_json`. For structured
   `gh api` output use the `--jq` / `-q` flag to project fields inside `gh`
   rather than fetching whole payloads and filtering in Python, consistent with
-  the existing queries. Scope every org query to `sil-ai` (`--owner sil-ai` or
-  `--repo sil-ai/{repo}`).
+  the existing queries. Scope every org-wide search with `"--", *SEARCH_SCOPE`
+  (the `sil-ai` org OR'd with `EXTRA_REPOS`), never `--owner sil-ai`, which
+  would drop the extra repos. Repos are full `owner/name` strings, so per-repo
+  calls use `--repo {repo}` / `repos/{repo}/...`, never `sil-ai/{repo}`.
 - **Caching:** expensive aggregate endpoints cache through the SQLite
   `api_cache` table via `_api_cache_get(cache_url)` / `_api_cache_set(cache_url,
   result)`, keyed by a `cache_url` string built from the path and its params
@@ -85,7 +87,7 @@ New routes must match the established conventions — flag deviations:
   path) + `loop.run_in_executor`, and `asyncio.gather` the results — do not loop
   with sequential blocking `gh` calls.
 - **Active repos:** repo-wide endpoints derive their repo set from
-  `get_active_repos()` (non-archived, updated within 90 days) rather than
+  `get_active_repos()` (non-archived, pushed within 90 days, plus `EXTRA_REPOS`) rather than
   re-listing repos with bespoke filters.
 - **Dates:** format and age dates with the existing helpers (`days_ago`,
   `fmt_date`, `since_date`) instead of re-deriving the arithmetic.

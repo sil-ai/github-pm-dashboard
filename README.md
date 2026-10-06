@@ -25,7 +25,7 @@ for the vocabulary.
 ## Prerequisites
 
 - Python 3.10+
-- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with access to the sil-ai org
+- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated with access to the sil-ai org, plus read access to the repos in `EXTRA_REPOS` (`dashboard.py`) — currently `paranext/paratext-assistant` and `sillsdev/paratext-assistant-server`, both private
 
 ## Configuration
 
