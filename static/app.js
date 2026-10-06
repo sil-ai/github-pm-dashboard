@@ -993,307 +993,197 @@ function renderMyTasksData(user, data) {
   el.innerHTML = html;
 }
 
-// --- Plans ---
+// --- Wayfinder maps (read-only) ---
 
-const planOpen = new Set();
-let planOpenInit = false;
-let plansData = { plans: [], canWrite: false };
+const mapOpen = new Set();
+let mapOpenInit = false;
+let mapsData = { maps: [] };
 
-function planKey(p) { return `${p.repo}#${p.number}`; }
-function planUser() { return localStorage.getItem('plans-user') || ''; }
-
-const kindStyles = {
-  merge: 'bg-indigo-500/15 text-indigo-300',
-  migrate: 'bg-amber-500/15 text-amber-300',
-  deploy: 'bg-sky-500/15 text-sky-300',
-  verify: 'bg-violet-500/15 text-violet-300',
-  manual: 'bg-white/[0.07] text-gray-400',
+const ticketTypes = {
+  grilling: { style: 'bg-violet-500/15 text-violet-300', mode: 'HITL' },
+  prototype: { style: 'bg-sky-500/15 text-sky-300', mode: 'HITL' },
+  research: { style: 'bg-emerald-500/15 text-emerald-300', mode: 'AFK' },
+  task: { style: 'bg-amber-500/15 text-amber-300', mode: 'HITL or AFK' },
 };
 
-function kindBadge(kind) {
-  if (!kind) return '';
-  const style = Object.hasOwn(kindStyles, kind) ? kindStyles[kind] : kindStyles.manual;
-  return `<span class="rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wider ${style}">${escHtml(kind)}</span>`;
+// Escapes first, then renders the inline markdown map bodies lean on: links,
+// bold and code. Only http(s) links become anchors.
+function mdInline(s) {
+  return escHtml(s)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2" target="_blank" class="text-accent hover:text-white">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="text-gray-200">$1</strong>')
+    .replace(/`([^`]+)`/g, '<code class="font-mono text-[11px] text-gray-300">$1</code>');
 }
 
-// Live state is what GitHub reports. It is never treated as Done.
-function liveState(step) {
-  if (step.badRef)
-    return { warn: true, text: `⚠ invalid ref "${escHtml(step.badRef)}" — must be a number` };
-  const live = step.live;
-  if (!live) return null;
-  if (live.state === 'not_found')
-    return { warn: true, text: `⚠ ref not found — check ${escHtml(step.repo)}#${step.ref}` };
-  if (live.state === 'closed_unmerged')
-    return { warn: true, text: '⚠ closed unmerged — code did not land' };
-  if (live.state === 'merged')
-    return { cls: 'text-accent', text: `merged ${timeAgo(live.mergedAt)}${step.done ? '' : ' — not yet confirmed'}` };
-  if (live.state === 'draft')
-    return { cls: 'text-gray-500', text: 'draft' };
-  if (live.type === 'issue')
-    return { cls: 'text-gray-500', text: `issue ${escHtml(live.state)}` };
-  const review = {
-    APPROVED: { cls: 'text-sky-400', text: 'open · approved' },
-    CHANGES_REQUESTED: { cls: 'text-amber-400', text: 'open · changes requested' },
-    REVIEW_REQUIRED: { cls: 'text-gray-500', text: 'open · awaiting review' },
-  }[live.reviewDecision];
-  return review || { cls: 'text-gray-500', text: 'open' };
+function ticketBadge(type) {
+  if (!type) return '';
+  const t = Object.hasOwn(ticketTypes, type) ? ticketTypes[type] : ticketTypes.task;
+  return `<span class="rounded px-1.5 py-px text-[10px] font-medium uppercase tracking-wider ${t.style}"
+    title="${t.mode}">${escHtml(type)}</span>`;
 }
 
-function renderStep(plan, step, canWrite) {
-  const outOfOrder = step.done && plan.nextUp !== null && step.index > plan.nextUp;
-  const isNext = !step.done && step.index === plan.nextUp;
-  const live = liveState(step);
-
-  // A merged PR on an unticked Step gets its own mark, so the checkbox itself
-  // says "GitHub says yes, nobody has confirmed" — not just the text beside it.
-  const observed = !step.done && step.live && step.live.state === 'merged';
-  const box = step.done
-    ? `<span class="text-emerald-400 text-[13px] leading-none">&#10003;</span>`
-    : observed ? `<span class="w-1.5 h-1.5 rounded-full bg-accent/70"></span>` : '';
-  const boxCls = step.done
-    ? 'border-emerald-400/70 bg-emerald-400/15'
-    : isNext ? 'border-accent/60' : 'border-border';
-
-  let meta = '';
-  if (step.repo && step.ref) {
-    meta = `<a href="https://github.com/sil-ai/${encodeURIComponent(step.repo)}/issues/${step.ref}" target="_blank"
-      class="font-mono text-[11px] text-accent hover:text-white">${escHtml(step.repo)}#${step.ref}</a>`;
-  } else if (step.repo) {
-    meta = `<span class="font-mono text-[11px] text-muted">${escHtml(step.repo)}</span>`;
-  }
-
-  return `<div class="flex items-start gap-2.5 py-1">
-    <button data-tick="1" data-repo="${escHtml(plan.repo)}" data-number="${plan.number}"
-      data-index="${step.index}" data-done="${step.done}" data-raw="${escHtml(step.raw)}"
-      role="checkbox" aria-checked="${step.done}"
-      aria-label="Mark step ${step.index + 1} ${step.done ? 'not done' : 'done'}"
-      ${canWrite ? '' : 'disabled title="Read-only — GH_WRITE_TOKEN is not configured"'}
-      class="-ml-1.5 mt-px w-7 h-7 shrink-0 flex items-center justify-center rounded-lg transition-colors
-        ${canWrite ? 'hover:bg-white/5' : 'opacity-40 cursor-not-allowed'}
-        focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none">
-      <span class="w-4 h-4 rounded border ${boxCls} flex items-center justify-center transition-colors">${box}</span>
-    </button>
-    <div class="min-w-0 flex-1">
-      <div class="flex items-baseline gap-2 flex-wrap">
-        <span class="text-muted tabular-nums text-[11px] w-4 shrink-0">${step.index + 1}</span>
-        <span class="text-sm ${step.done ? 'text-gray-500 line-through decoration-gray-600' : 'text-gray-200'}">${escHtml(step.text)}</span>
-        ${meta}
-        ${kindBadge(step.kind)}
-        ${isNext ? '<span class="rounded bg-accent/20 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent">next up</span>' : ''}
-        ${outOfOrder ? '<span class="text-[10px] font-semibold uppercase tracking-wider text-amber-400" title="Ticked before an earlier step">out of order</span>' : ''}
-      </div>
-      <div class="ml-6 flex items-baseline gap-3 text-[11px]">
-        ${live ? `<span class="${live.warn
-          ? 'rounded border border-red-500/40 bg-red-500/15 px-1.5 py-px font-medium text-red-300'
-          : live.cls}">${live.text}</span>` : ''}
-        ${step.done && step.by ? `<span class="text-muted">${displayName(step.by)} · ${timeAgo(step.at)}</span>` : ''}
-      </div>
+function renderTicket(map, t) {
+  const dot = {
+    frontier: 'bg-accent', claimed: 'bg-amber-400', blocked: 'bg-gray-600',
+    resolved: 'bg-emerald-400', out_of_scope: 'bg-gray-700',
+  }[t.status];
+  const ref = t.repo === map.repo ? `#${t.number}` : `${t.repo}#${t.number}`;
+  const state = {
+    claimed: `<span class="text-amber-400">claimed · ${t.assignees.map(displayName).join(', ')}</span>`,
+    blocked: `<span class="text-gray-500">blocked by ${t.blockedBy} open ticket${t.blockedBy === 1 ? '' : 's'}</span>`,
+    resolved: `<span class="text-muted">resolved ${timeAgo(t.closedAt)}</span>`,
+    out_of_scope: `<span class="text-muted">ruled out of scope</span>`,
+  }[t.status] || '';
+  const closed = t.status === 'resolved' || t.status === 'out_of_scope';
+  return `<div class="flex items-baseline gap-2.5 py-1">
+    <span class="w-1.5 h-1.5 rounded-full shrink-0 translate-y-[-2px] ${dot}"></span>
+    <div class="min-w-0 flex-1 flex items-baseline gap-2 flex-wrap">
+      <a href="${t.url}" target="_blank" class="text-sm hover:text-accent ${closed ? 'text-gray-500' : 'text-gray-200'}">${escHtml(t.title)}</a>
+      <span class="font-mono text-[11px] text-muted">${escHtml(ref)}</span>
+      ${ticketBadge(t.type)}
+      ${t.number === map.nextUp ? '<span class="rounded bg-accent/20 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent" title="First frontier ticket in map order">next up</span>' : ''}
+      <span class="text-[11px]">${state}</span>
     </div>
   </div>`;
 }
 
-function renderPlan(plan, canWrite) {
-  const open = planOpen.has(planKey(plan));
-  const complete = plan.total > 0 && plan.doneCount === plan.total;
-  const pct = plan.total ? Math.round((plan.doneCount / plan.total) * 100) : 0;
+function mapSection(title, text, open = false) {
+  if (!text) return '';
+  return `<details class="mb-3" ${open ? 'open' : ''}>
+    <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 list-none">
+      &#9656; ${title}</summary>
+    <div class="mt-2 text-xs text-gray-400 whitespace-pre-wrap border-l-2 border-border pl-3">${mdInline(text)}</div>
+  </details>`;
+}
+
+function ticketGroup(map, title, tickets) {
+  if (!tickets.length) return '';
+  return `<div class="mb-3">
+    <h4 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-1">${title} (${tickets.length})</h4>
+    ${tickets.map(t => renderTicket(map, t)).join('')}
+  </div>`;
+}
+
+function renderMap(map) {
+  const key = `${map.repo}#${map.number}`;
+  const open = mapOpen.has(key);
+  const by = status => map.tickets.filter(t => t.status === status);
+  const frontier = by('frontier');
+  const pct = map.total ? Math.round((map.resolved / map.total) * 100) : 0;
 
   let html = `<div class="bg-panel border border-border rounded-xl mb-3 overflow-hidden">
-    <button data-plan-toggle="${escHtml(planKey(plan))}"
+    <button data-map-toggle="${escHtml(key)}"
       class="w-full flex flex-wrap items-center gap-3 px-4 py-3 text-left hover:bg-white/[0.02] transition-colors
         focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:outline-none">
       <span class="text-muted text-xs w-3 shrink-0">${open ? '&#9662;' : '&#9656;'}</span>
-      <span class="font-semibold text-gray-100 text-sm min-w-0 flex-1 truncate" title="${escHtml(plan.title)}">${escHtml(plan.title)}</span>
-      <span class="flex gap-1 flex-wrap">${plan.repos.map(r =>
-        `<span class="rounded bg-white/[0.06] px-1.5 py-px text-[10px] font-mono text-gray-400">${escHtml(r)}</span>`).join('')}</span>
+      <span class="font-semibold text-gray-100 text-sm min-w-0 flex-1 truncate" title="${escHtml(map.title)}">${escHtml(map.title)}</span>
+      <span class="rounded bg-white/[0.06] px-1.5 py-px text-[10px] font-mono text-gray-400">${escHtml(map.repo)}</span>
       <span class="ml-auto flex items-center gap-2.5 shrink-0">
-        ${plan.state === 'open' ? `<span class="w-16 h-1 rounded-full bg-white/10 overflow-hidden">
-          <span class="block h-full bg-accent" style="width:${pct}%"></span></span>` : ''}
-        <span class="text-xs tabular-nums ${complete ? 'text-emerald-400' : 'text-muted'}">${plan.doneCount}/${plan.total}</span>
-        ${plan.state !== 'open' ? `<span class="text-[11px] text-muted">closed ${timeAgo(plan.closedAt)}</span>` : ''}
+        ${map.state === 'open' && frontier.length ? `<span class="text-[11px] text-accent">${frontier.length} on the frontier</span>` : ''}
+        ${map.state === 'open' ? `<span class="w-16 h-1 rounded-full bg-white/10 overflow-hidden">
+          <span class="block h-full bg-emerald-400/80" style="width:${pct}%"></span></span>` : ''}
+        <span class="text-xs tabular-nums text-muted" title="Tickets resolved">${map.resolved}/${map.total}</span>
+        ${map.state !== 'open' ? `<span class="text-[11px] text-muted">closed ${timeAgo(map.closedAt)}</span>` : ''}
       </span>
     </button>`;
 
   if (open) {
     html += `<div class="px-4 pb-4 border-t border-border/60 pt-3">`;
-    if (plan.context) {
-      html += `<details class="mb-3 group">
+    if (map.destination) {
+      html += `<div class="mb-4">
+        <h4 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-1">Destination</h4>
+        <div class="text-sm text-gray-300 whitespace-pre-wrap">${mdInline(map.destination)}</div>
+      </div>`;
+    }
+    if (!map.tickets.length) {
+      html += `<p class="text-sm text-gray-500 mb-3">No tickets — the map has no sub-issues.</p>`;
+    }
+    html += ticketGroup(map, 'Frontier', frontier);
+    html += ticketGroup(map, 'Claimed', by('claimed'));
+    html += ticketGroup(map, 'Blocked', by('blocked'));
+    const closed = [...by('resolved'), ...by('out_of_scope')];
+    if (closed.length) {
+      html += `<details class="mb-3">
         <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 list-none">
-          &#9656; Context</summary>
-        <div class="mt-2 text-xs text-gray-400 whitespace-pre-wrap border-l-2 border-border pl-3">${escHtml(plan.context)}</div>
+          &#9656; Closed tickets (${closed.length})</summary>
+        <div class="mt-1">${closed.map(t => renderTicket(map, t)).join('')}</div>
       </details>`;
     }
-    if (!plan.total) {
-      html += `<p class="text-sm text-gray-500">No steps in this plan — the issue has no checklist.</p>`;
-    } else {
-      html += plan.steps.map(s => renderStep(plan, s, canWrite)).join('');
-    }
-    html += `<div class="flex items-center gap-3 mt-3 pt-3 border-t border-border/60">
-      <a href="${plan.url}" target="_blank" class="text-[11px] text-muted hover:text-accent">open issue &#8599;</a>
-      ${complete && plan.state === 'open' ? `<button data-plan-close="1" data-repo="${escHtml(plan.repo)}" data-number="${plan.number}"
-        ${canWrite ? '' : 'disabled title="Read-only — GH_WRITE_TOKEN is not configured"'}
-        class="ml-auto text-[11px] bg-accent/90 text-white px-3 py-1.5 rounded-lg transition-colors
-          ${canWrite ? 'hover:bg-accent' : 'opacity-40 cursor-not-allowed'}">All steps done — close plan</button>` : ''}
+    html += mapSection('Decisions so far', map.decisions);
+    html += mapSection('Not yet specified', map.fog);
+    html += mapSection('Out of scope', map.outOfScope);
+    html += mapSection('Notes', map.notes);
+    html += `<div class="mt-3 pt-3 border-t border-border/60">
+      <a href="${map.url}" target="_blank" class="text-[11px] text-muted hover:text-accent">open map &#8599;</a>
     </div></div>`;
   }
   return html + `</div>`;
 }
 
-function renderPlans(data) {
-  plansData = data;
-  const plans = data.plans || [];
-  const active = plans.filter(p => p.state === 'open');
-  const done = plans.filter(p => p.state !== 'open');
+function renderMaps(data) {
+  mapsData = data;
+  const maps = data.maps || [];
+  const active = maps.filter(m => m.state === 'open');
+  const done = maps.filter(m => m.state !== 'open');
 
-  if (!planOpenInit) {
-    active.forEach(p => planOpen.add(planKey(p)));
-    planOpenInit = true;
+  // Open the first map with something takeable, so the tab lands on a frontier.
+  const first = active.find(m => m.nextUp !== null) || active[0];
+  if (!mapOpenInit && first) {
+    mapOpen.add(`${first.repo}#${first.number}`);
+    mapOpenInit = true;
   }
 
-  const user = planUser();
-  let html = `<div class="flex items-center justify-between gap-4 mb-5 flex-wrap">
-    <h2 class="text-2xl font-bold">Plans</h2>
-    <div class="flex items-center gap-2 text-sm">
-      <span class="text-muted text-xs">You are</span>
-      <select id="plans-user" class="bg-panel border border-border text-gray-200 rounded-lg px-3 py-1.5 text-xs">
-        <option value="">Select yourself…</option>
-        ${orgMembers.map(m => `<option value="${m}" ${m === user ? 'selected' : ''}>${m}</option>`).join('')}
-      </select>
-    </div>
-  </div>
-  <div id="plans-error" class="hidden mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-300"></div>`;
+  let html = `<div class="flex items-baseline justify-between gap-4 mb-5 flex-wrap">
+    <h2 class="text-2xl font-bold">Maps</h2>
+    <p class="text-xs text-muted">Wayfinder maps across sil-ai. Tickets are claimed and resolved by
+      <span class="font-mono text-accent">/wayfinder</span> sessions, not here.</p>
+  </div>`;
 
-  if (!data.canWrite) {
-    html += `<div class="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-4 py-2.5 text-xs text-amber-300">
-      Read-only: <span class="font-mono">GH_WRITE_TOKEN</span> is not configured on this server, so steps cannot be ticked here.
-    </div>`;
-  }
-
-  if (!plans.length) {
+  if (!maps.length) {
     html += `<div class="bg-panel border border-border rounded-xl p-8 text-center">
-      <p class="text-gray-400 mb-1">No plans yet.</p>
-      <p class="text-sm text-gray-500">Create one from any repo with
-        <span class="font-mono text-accent">/github-pm plan</span>, or open an issue there
-        labelled <span class="font-mono text-accent">plan</span> with a checklist.</p>
+      <p class="text-gray-400 mb-1">No maps yet.</p>
+      <p class="text-sm text-gray-500">Chart one from any repo with
+        <span class="font-mono text-accent">/wayfinder</span>.</p>
     </div>`;
     content.innerHTML = html;
     return;
   }
 
-  html += `<h3 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">In progress (${active.length})</h3>`;
-  html += active.length ? active.map(p => renderPlan(p, data.canWrite)).join('')
-    : `<p class="text-sm text-gray-500 mb-4">Nothing in progress.</p>`;
+  html += `<h3 class="text-[11px] font-semibold uppercase tracking-wider text-muted mb-2">Open (${active.length})</h3>`;
+  html += active.length ? active.map(renderMap).join('')
+    : `<p class="text-sm text-gray-500 mb-4">No open maps.</p>`;
 
   if (done.length) {
     html += `<details class="mt-6">
       <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-muted hover:text-gray-400 mb-2 list-none">
-        &#9656; Completed · last 14 days (${done.length})</summary>
-      <div class="mt-2">${done.map(p => renderPlan(p, data.canWrite)).join('')}</div>
+        &#9656; Closed · last 14 days (${done.length})</summary>
+      <div class="mt-2">${done.map(renderMap).join('')}</div>
     </details>`;
   }
 
   content.innerHTML = html;
 }
 
-function planError(msg, focusUser) {
-  const el = $('#plans-error');
-  if (!el) return;
-  el.textContent = msg;
-  el.classList.remove('hidden');
-  // The banner sits above the plan list; the step just clicked may be screens
-  // below it, so bring it to the user rather than announcing off-screen.
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  if (focusUser) $('#plans-user')?.focus();
-}
-
-async function tickStep(btn) {
-  const user = planUser();
-  if (!user) return planError('Pick who you are before ticking a step.', true);
-
-  const { repo, number, index, raw } = btn.dataset;
-  const done = btn.dataset.done !== 'true';
-  $('#plans-error')?.classList.add('hidden');
-  btn.disabled = true;
-
-  try {
-    const res = await fetch(`/api/plans/${encodeURIComponent(repo)}/${number}/steps/${index}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ done, by: user, expect: raw || '' }),
-    });
-    const out = await res.json();
-    if (!res.ok) {
-      // Reload first: renderPlans() rebuilds #plans-error as hidden, so setting
-      // the message before the reload would erase it in the same tick.
-      if (res.status === 409) await loadPlans();
-      planError(out.error || `Could not save (HTTP ${res.status})`);
-      return;
-    }
-    const plan = plansData.plans.find(p => p.repo === repo && String(p.number) === number);
-    const step = plan.steps[Number(index)];
-    Object.assign(step, { done, raw: out.raw, by: out.by, at: out.at });
-    plan.doneCount = plan.steps.filter(s => s.done).length;
-    plan.nextUp = plan.steps.findIndex(s => !s.done);
-    if (plan.nextUp === -1) plan.nextUp = null;
-    cache['/api/plans'] = { data: plansData, time: Date.now() };
-    renderPlans(plansData);
-  } catch (e) {
-    planError(`Could not save: ${e.message}`);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function closePlan(btn) {
-  const { repo, number } = btn.dataset;
-  btn.disabled = true;
-  try {
-    const res = await fetch(`/api/plans/${encodeURIComponent(repo)}/${number}/close`, { method: 'POST' });
-    if (!res.ok) {
-      const out = await res.json().catch(() => ({}));
-      planError(out.error || `Could not close (HTTP ${res.status})`);
-      return;
-    }
-    delete cache['/api/plans'];
-    await loadPlans();
-  } catch (e) {
-    planError(`Could not close: ${e.message}`);
-  }
-}
-
-async function loadPlans() {
-  if (!orgMembers.length) orgMembers = await fetchJson('/api/org-members');
+async function loadMaps() {
   await displayNamesReady;
-  if (!cache['/api/plans']) showLoading();
-  await fetchCached('/api/plans', renderPlans);
+  if (!cache['/api/maps']) showLoading();
+  await fetchCached('/api/maps', renderMaps);
 }
 
 content.addEventListener('click', (e) => {
-  const toggle = e.target.closest('[data-plan-toggle]');
-  if (toggle) {
-    const key = toggle.dataset.planToggle;
-    planOpen.has(key) ? planOpen.delete(key) : planOpen.add(key);
-    renderPlans(plansData);
-    return;
-  }
-  const tick = e.target.closest('[data-tick]');
-  if (tick) return tickStep(tick);
-  const close = e.target.closest('[data-plan-close]');
-  if (close) return closePlan(close);
-});
-
-content.addEventListener('change', (e) => {
-  if (e.target.id === 'plans-user') {
-    localStorage.setItem('plans-user', e.target.value);
-    $('#plans-error')?.classList.add('hidden');
-  }
+  const toggle = e.target.closest('[data-map-toggle]');
+  if (!toggle) return;
+  const key = toggle.dataset.mapToggle;
+  mapOpen.has(key) ? mapOpen.delete(key) : mapOpen.add(key);
+  renderMaps(mapsData);
 });
 
 // --- Tab navigation ---
 
 const tabHandlers = {
   'summary': loadSummary,
-  'plans': loadPlans,
+  'maps': loadMaps,
   'overdue': loadOverdue,
   'priorities': loadPriorities,
   'pr-status': loadPrStatus,
@@ -1306,7 +1196,7 @@ function activateTab(tab) {
   $$('.tab-btn').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
   if (btn) btn.classList.add('active');
-  $('#range-controls').classList.toggle('hidden', tab === 'plans');
+  $('#range-controls').classList.toggle('hidden', tab === 'maps');
   tabHandlers[tab]();
 }
 
