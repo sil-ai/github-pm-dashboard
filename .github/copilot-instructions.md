@@ -41,7 +41,7 @@ Every new or modified route must be complete and safe end to end:
   (never a shell string and never `shell=True`). User-supplied values such as
   `repo` or `username` arrive as path/query params and are interpolated into
   `gh` arguments — keep them as discrete list elements (e.g.
-  `"--repo", f"sil-ai/{repo}"`), never spliced into a shell command, so there is
+  `"--repo", repo`), never spliced into a shell command, so there is
   no shell-injection surface.
 - Sets an explicit `timeout=` on `gh` calls that fan out per-repo (the existing
   code uses 10–15s) so one slow repo cannot hang the whole request, and wraps
