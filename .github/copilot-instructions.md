@@ -25,8 +25,10 @@ Every new or modified route must be complete and safe end to end:
   `HTMLResponse`); data endpoints live under `/api/...` and return
   `JSONResponse`. Auth-state changes use `RedirectResponse`.
 - Is declared `async def`. Because `gh` calls are blocking `subprocess` calls,
-  they must not run directly on the event loop when fanned out — offload them to
-  the `ThreadPoolExecutor` via `loop.run_in_executor(...)` and
+  they must never run directly on the event loop — the app runs one uvicorn
+  worker, so a single blocking call stalls every other request. Wrap a lone call
+  in `await asyncio.to_thread(run_gh_json, [...])`; fan out per-repo calls via
+  the `ThreadPoolExecutor` with `loop.run_in_executor(...)` and
   `await asyncio.gather(...)`, exactly as `api_repo_summaries`, `api_weekly`,
   `api_pr_status`, and `api_actions` do.
 - Respects auth. `_AuthMiddleware` redirects unauthenticated requests to
