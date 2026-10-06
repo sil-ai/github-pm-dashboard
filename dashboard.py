@@ -59,6 +59,9 @@ app = FastAPI()
 app.add_middleware(_AuthMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+# Content hash in the script URL, so a deploy never runs a new page against a
+# browser-cached app.js (a new tab button with no handler does nothing).
+APP_JS_VERSION = sha256(Path("static/app.js").read_bytes()).hexdigest()[:12]
 
 
 def run_gh(args: list[str], timeout: int = 60) -> str:
@@ -176,7 +179,9 @@ async def logout():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(
+        request=request, name="index.html", context={"app_js_version": APP_JS_VERSION},
+    )
 
 
 @app.get("/api/active-repos")
