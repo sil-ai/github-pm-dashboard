@@ -102,7 +102,14 @@ async function fetchJson(url) {
 const cache = {};
 let fetchGen = 0;
 
-async function fetchCached(url, onData) {
+function errorBox(url, e) {
+  return `<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+    Could not load ${escHtml(url)}: ${escHtml(e.message)}. Try the refresh button.</div>`;
+}
+
+// `target` is where an error goes when nothing is cached: a tab that keeps its
+// own controls in #content passes the inner element its data renders into.
+async function fetchCached(url, onData, target = content) {
   const gen = ++fetchGen;
   const cached = cache[url];
   if (cached) {
@@ -116,10 +123,7 @@ async function fetchCached(url, onData) {
     if (gen !== fetchGen) return;
     hideLoading();
     $('#refresh-btn').classList.remove('refreshing');
-    if (!cached) {
-      content.innerHTML = `<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-        Could not load ${escHtml(url)}: ${escHtml(e.message)}. Try the refresh button.</div>`;
-    }
+    if (!cached) target.innerHTML = errorBox(url, e);
     return;
   }
   // A superseded request must not touch the spinner: the tab that replaced it
@@ -144,7 +148,7 @@ async function fetchCached(url, onData) {
         onData(fresh, false);
       }
     } catch {}
-    $('#refresh-btn').classList.remove('refreshing');
+    if (gen === fetchGen) $('#refresh-btn').classList.remove('refreshing');
   }
 }
 
@@ -767,7 +771,13 @@ async function openRepoModal(repo) {
   } else {
     body.innerHTML = '<div class="flex items-center gap-3 py-8 justify-center"><div class="spinner"></div><span class="text-gray-400">Loading...</span></div>';
   }
-  const data = await fetchJson(url);
+  let data;
+  try {
+    data = await fetchJson(url);
+  } catch (e) {
+    if (!cached) body.innerHTML = errorBox(url, e);
+    return;
+  }
   const isStale = data._stale;
   delete data._stale;
   cache[url] = { data, time: Date.now() };
@@ -933,7 +943,14 @@ function renderRepoModal(data) {
 // --- My Tasks ---
 
 async function loadMyTasks() {
-  if (!orgMembers.length) orgMembers = await fetchJson('/api/org-members');
+  if (!orgMembers.length) {
+    try {
+      orgMembers = await fetchJson('/api/org-members');
+    } catch (e) {
+      content.innerHTML = errorBox('/api/org-members', e);
+      return;
+    }
+  }
   const saved = localStorage.getItem('my-tasks-user') || '';
 
   let html = `<h2 class="text-2xl font-bold mb-4">My Tasks</h2>
@@ -956,7 +973,7 @@ async function loadMyTasks() {
     if (!cached) {
       $('#member-content').innerHTML = '<div class="flex items-center gap-3 py-8"><div class="spinner"></div><span class="text-gray-400">Loading...</span></div>';
     }
-    await fetchCached(url, (data) => renderMyTasksData(user, data));
+    await fetchCached(url, (data) => renderMyTasksData(user, data), $('#member-content'));
   };
 
   $('#member-load-btn').addEventListener('click', loadUser);

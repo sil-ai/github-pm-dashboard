@@ -61,7 +61,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 # Content hash in the script URL, so a deploy never runs a new page against a
 # browser-cached app.js (a new tab button with no handler does nothing).
-APP_JS_VERSION = sha256(Path("static/app.js").read_bytes()).hexdigest()[:12]
+APP_JS_VERSION = sha256((Path(__file__).parent / "static" / "app.js").read_bytes()).hexdigest()[:12]
 
 
 def run_gh(args: list[str], timeout: int = 60) -> str:
@@ -292,14 +292,14 @@ async def api_org_members():
 async def api_display_names():
     names_file = Path(__file__).parent / "display_names.json"
     if names_file.exists():
-        return JSONResponse(json.loads(names_file.read_text()))
+        return JSONResponse(json.loads(await asyncio.to_thread(names_file.read_text)))
     return JSONResponse({})
 
 
 @app.get("/api/weekly")
 async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
     cache_url = f"/api/weekly?start={start}&end={end}"
-    cached, is_stale = _api_cache_get(cache_url)
+    cached, is_stale = await asyncio.to_thread(_api_cache_get, cache_url)
     if cached and not fresh:
         if is_stale:
             cached["_stale"] = True
@@ -373,7 +373,7 @@ async def api_weekly(start: str = "", end: str = "", fresh: str = ""):
         "prs_merged": prs_merged,
         "commits_by_repo": commits_by_repo,
     }
-    _api_cache_set(cache_url, result)
+    await asyncio.to_thread(_api_cache_set, cache_url, result)
     return JSONResponse(result)
 
 
@@ -434,7 +434,7 @@ async def api_priorities():
 @app.get("/api/repo-status/{repo}")
 async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str = ""):
     cache_url = f"/api/repo-status/{repo}?start={start}&end={end}"
-    cached, is_stale = _api_cache_get(cache_url)
+    cached, is_stale = await asyncio.to_thread(_api_cache_get, cache_url)
     if cached and not fresh:
         if is_stale:
             cached["_stale"] = True
@@ -534,7 +534,7 @@ async def api_repo_status(repo: str, start: str = "", end: str = "", fresh: str 
         "recent_closed": recent_closed,
         "branch_commits": branch_commits,
     }
-    _api_cache_set(cache_url, result)
+    await asyncio.to_thread(_api_cache_set, cache_url, result)
     return JSONResponse(result)
 
 
@@ -898,7 +898,7 @@ def fetch_map(listed: dict) -> dict | None:
 @app.get("/api/maps")
 async def api_maps(fresh: str = ""):
     cache_url = "/api/maps"
-    cached, is_stale = (None, True) if fresh else _api_cache_get(cache_url)
+    cached, is_stale = (None, True) if fresh else await asyncio.to_thread(_api_cache_get, cache_url)
     if cached:
         if is_stale:
             cached["_stale"] = True
@@ -914,5 +914,5 @@ async def api_maps(fresh: str = ""):
 
     maps = sorted((m for m in maps if m), key=lambda m: m["updatedAt"] or "", reverse=True)
     result = {"maps": maps}
-    _api_cache_set(cache_url, result)
+    await asyncio.to_thread(_api_cache_set, cache_url, result)
     return JSONResponse(result)
